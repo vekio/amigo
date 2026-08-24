@@ -7,57 +7,41 @@ import (
 	"strings"
 )
 
-// Route describes an HTTP endpoint relative to its Router.
-type Route struct {
+// route describes an HTTP endpoint relative to its Router.
+type route struct {
 	Method string
 	Path   string
 	Tags   []string
 	Input  *InputMetadata
 	Output *OutputMetadata
 
-	handlerFactory func(ErrorHandler) http.Handler
+	handlerFactory func(*InputMetadata, ErrorHandler) http.Handler
 }
 
-func get[In, Out any](router *Router, path string, handler Handler[In, Out], options ...RouteOption) *Route {
-	return register(router, http.MethodGet, path, handler, options...)
-}
+func register[In, Out any](router *Router, method, path string, handler Handler[In, Out], options ...RouteOption) {
+	router.assertMutable()
+	if handler == nil {
+		panic(fmt.Sprintf("amigo: %s %s: handler is nil", method, path))
+	}
 
-func post[In, Out any](router *Router, path string, handler Handler[In, Out], options ...RouteOption) *Route {
-	return register(router, http.MethodPost, path, handler, options...)
-}
-
-func put[In, Out any](router *Router, path string, handler Handler[In, Out], options ...RouteOption) *Route {
-	return register(router, http.MethodPut, path, handler, options...)
-}
-
-func patch[In, Out any](router *Router, path string, handler Handler[In, Out], options ...RouteOption) *Route {
-	return register(router, http.MethodPatch, path, handler, options...)
-}
-
-func deleteRoute[In, Out any](router *Router, path string, handler Handler[In, Out], options ...RouteOption) *Route {
-	return register(router, http.MethodDelete, path, handler, options...)
-}
-
-func register[In, Out any](router *Router, method, path string, handler Handler[In, Out], options ...RouteOption) *Route {
 	input, err := inspectInput(reflect.TypeFor[In]())
 	if err != nil {
 		panic(fmt.Sprintf("amigo: %s %s: %v", method, path, err))
 	}
 
-	route := &Route{
+	registered := &route{
 		Method: method,
 		Path:   path,
 		Input:  input,
 		Output: inspectOutput(reflect.TypeFor[Out]()),
-		handlerFactory: func(errorHandler ErrorHandler) http.Handler {
-			return handlerHTTP(handler, input, errorHandler)
+		handlerFactory: func(metadata *InputMetadata, errorHandler ErrorHandler) http.Handler {
+			return handlerHTTP(handler, metadata, errorHandler)
 		},
 	}
 	for _, option := range options {
-		option.applyRoute(route)
+		option.applyRoute(registered)
 	}
-	router.addRoute(route)
-	return route
+	router.addRoute(registered)
 }
 
 func joinPath(prefix, path string) string {

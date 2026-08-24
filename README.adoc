@@ -29,11 +29,11 @@ func main() {
 }
 ----
 
-The framework currently binds required path parameters, headers, and cookies.
-Supported field types are strings, booleans, signed and unsigned integers,
-floating-point numbers, and Go 1.27's `uuid.UUID`. `GET`, `POST`, `PUT`,
-`PATCH`, and `DELETE` are available. Query parameters, request bodies, defaults,
-and OpenAPI generation are intentionally not implemented yet.
+The framework binds path, query, header, and cookie parameters. A field named
+`Body` is decoded as strict JSON. Supported parameter types include strings,
+booleans, numbers, slices, pointers, `time.Time`, and types implementing
+`encoding.TextUnmarshaler`, such as Go 1.27's `uuid.UUID`. `GET`, `POST`, `PUT`,
+`PATCH`, and `DELETE` are available.
 
 Routes can be grouped in nested routers:
 
@@ -56,16 +56,17 @@ app.Include(api)
 ----
 
 Router options are optional, so `amigo.NewRouter()` is valid. Route options are
-optional too. Every registration method returns a relative `Route`. On the
-first request, the API recursively builds complete `Operation` values and
-registers them in its `http.ServeMux`. Prefixes, tags, and middleware are
-inherited from parent routers. The final tags above are
+optional too. On the first request, the API recursively builds complete
+`Operation` values and registers them in its `http.ServeMux`. Prefixes, tags,
+and middleware are inherited from parent routers. The final tags above are
 `["api", "users", "read"]`.
 
-`Run` builds the router tree once and gives the final `http.ServeMux` directly
-to `http.ListenAndServe`. `Handler` can be used when another server or tool
-needs the built `http.Handler`. `API` also implements `http.Handler` for direct
-compatibility with `net/http`.
+`Run` builds the router tree once and starts `http.ListenAndServe`. `Handler`
+can be used when another server or tool needs the built `http.Handler`, while
+`Operations` exposes a snapshot of the final route metadata. Routers must be
+configured from one goroutine before building. Building freezes the
+configuration, after which the API can serve requests concurrently. `API` also
+implements `http.Handler` for direct compatibility with `net/http`.
 
 == Run the example
 

@@ -23,25 +23,6 @@ type Problem struct {
 	err error
 }
 
-// FieldError describes one invalid request value.
-type FieldError struct {
-	Location string `json:"location"`
-	Message  string `json:"message"`
-}
-
-// ValidationError contains all invalid request values found during binding.
-type ValidationError struct {
-	Errors []FieldError
-}
-
-func (validation *ValidationError) Error() string {
-	return "request parameters are invalid"
-}
-
-func (validation *ValidationError) StatusCode() int {
-	return http.StatusBadRequest
-}
-
 // NewProblem creates a problem using the standard HTTP status title.
 func NewProblem(status int, detail string) *Problem {
 	return &Problem{
@@ -95,14 +76,6 @@ func UnprocessableEntity(detail string) *Problem {
 // InternalServerError creates a 500 problem.
 func InternalServerError(detail string) *Problem {
 	return NewProblem(http.StatusInternalServerError, detail)
-}
-
-func problemFromValidation(validation *ValidationError) *Problem {
-	problem := BadRequest("request parameters are invalid")
-	if validation != nil {
-		problem.Errors = append([]FieldError(nil), validation.Errors...)
-	}
-	return problem
 }
 
 func (problem *Problem) Error() string {

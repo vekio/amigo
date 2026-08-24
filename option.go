@@ -5,9 +5,15 @@ type RouterOption interface {
 	applyRouter(*Router)
 }
 
-// RouteOption configures a Route before it becomes an Operation.
+// RouteOption configures a route before it becomes an Operation.
 type RouteOption interface {
-	applyRoute(*Route)
+	applyRoute(*route)
+}
+
+// TagsOption configures tags on either a Router or a Route.
+type TagsOption interface {
+	RouterOption
+	RouteOption
 }
 
 type prefixOption string
@@ -24,7 +30,7 @@ func (prefix prefixOption) applyRouter(router *Router) {
 type tagsOption []string
 
 // Tags adds OpenAPI tags to a Router or Route.
-func Tags(tags ...string) tagsOption {
+func Tags(tags ...string) TagsOption {
 	return append(tagsOption(nil), tags...)
 }
 
@@ -32,6 +38,6 @@ func (tags tagsOption) applyRouter(router *Router) {
 	router.tags = append(router.tags, tags...)
 }
 
-func (tags tagsOption) applyRoute(route *Route) {
+func (tags tagsOption) applyRoute(route *route) {
 	route.Tags = append(route.Tags, tags...)
 }
