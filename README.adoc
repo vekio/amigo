@@ -35,6 +35,23 @@ booleans, numbers, slices, pointers, `time.Time`, and types implementing
 `encoding.TextUnmarshaler`, such as Go 1.27's `uuid.UUID`. `GET`, `POST`, `PUT`,
 `PATCH`, and `DELETE` are available.
 
+Typed validators can be registered and referenced from struct tags without
+coupling the framework to a validation library:
+
+[source,go]
+----
+app.Validator("adult", func(value int) error {
+    if value < 18 {
+        return errors.New("must be at least 18")
+    }
+    return nil
+})
+
+type CreateUserBody struct {
+    Age int `json:"age" validate:"adult"`
+}
+----
+
 Routes can be grouped in nested routers:
 
 [source,go]

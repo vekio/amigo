@@ -48,8 +48,8 @@ func GetUser(_ context.Context, input GetUserInput) (GetUserOutput, error) {
 }
 
 type ListUsersInput struct {
-	Page  int        `query:"page" default:"1"`
-	Limit int        `query:"limit" default:"20"`
+	Page  int        `query:"page" default:"1" validate:"positive"`
+	Limit int        `query:"limit" default:"20" validate:"positive"`
 	Tags  []string   `query:"tags"`
 	Since *time.Time `query:"since"`
 }
@@ -73,14 +73,14 @@ func ListUsers(_ context.Context, input ListUsersInput) (ListUsersOutput, error)
 }
 
 type CreateUserBody struct {
-	Name    string            `json:"name"`
-	Email   string            `json:"email"`
-	Age     int               `json:"age"`
+	Name    string            `json:"name" validate:"required"`
+	Email   string            `json:"email" validate:"required"`
+	Age     int               `json:"age" validate:"adult"`
 	Address CreateUserAddress `json:"address"`
 }
 
 type CreateUserAddress struct {
-	City string `json:"city"`
+	City string `json:"city" validate:"required"`
 }
 
 type CreateUserInput struct {
@@ -97,29 +97,6 @@ type CreateUserOutput struct {
 }
 
 func CreateUser(_ context.Context, input CreateUserInput) (CreateUserOutput, error) {
-	validation := &amigo.ValidationError{}
-	if input.Body.Email == "" {
-		validation.Errors = append(validation.Errors, amigo.FieldError{
-			Location: "body.email",
-			Message:  "value is required",
-		})
-	}
-	if input.Body.Age < 0 {
-		validation.Errors = append(validation.Errors, amigo.FieldError{
-			Location: "body.age",
-			Message:  "must be greater than or equal to 0",
-		})
-	}
-	if input.Body.Address.City == "" {
-		validation.Errors = append(validation.Errors, amigo.FieldError{
-			Location: "body.address.city",
-			Message:  "value is required",
-		})
-	}
-	if len(validation.Errors) > 0 {
-		return CreateUserOutput{}, validation
-	}
-
 	return CreateUserOutput{
 		Name:          input.Body.Name,
 		Email:         input.Body.Email,
@@ -188,6 +165,24 @@ func EncodingError(_ context.Context, _ NoInput) (EncodingErrorOutput, error) {
 func main() {
 	app := amigo.New()
 	app.SetErrorHandler(exampleErrorHandler)
+	app.Validator("required", func(value string) error {
+		if value == "" {
+			return errors.New("value is required")
+		}
+		return nil
+	})
+	app.Validator("positive", func(value int) error {
+		if value < 1 {
+			return errors.New("must be greater than 0")
+		}
+		return nil
+	})
+	app.Validator("adult", func(value int) error {
+		if value < 18 {
+			return errors.New("must be at least 18")
+		}
+		return nil
+	})
 	api := amigo.NewRouter(
 		amigo.Prefix("/api"),
 		amigo.Tags("api"),

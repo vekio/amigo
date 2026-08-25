@@ -15,8 +15,10 @@ type route struct {
 	Input  *InputMetadata
 	Output *OutputMetadata
 
-	handlerFactory func(*InputMetadata, ErrorHandler) http.Handler
+	buildHandler handlerBuilder
 }
+
+type handlerBuilder func(*InputMetadata, validatorRegistry, ErrorHandler) http.Handler
 
 func register[In, Out any](router *Router, method, path string, handler Handler[In, Out], options ...RouteOption) {
 	router.assertMutable()
@@ -34,8 +36,12 @@ func register[In, Out any](router *Router, method, path string, handler Handler[
 		Path:   path,
 		Input:  input,
 		Output: inspectOutput(reflect.TypeFor[Out]()),
-		handlerFactory: func(metadata *InputMetadata, errorHandler ErrorHandler) http.Handler {
-			return handlerHTTP(handler, metadata, errorHandler)
+		buildHandler: func(
+			metadata *InputMetadata,
+			validators validatorRegistry,
+			errorHandler ErrorHandler,
+		) http.Handler {
+			return handlerHTTP(handler, metadata, validators, errorHandler)
 		},
 	}
 	for _, option := range options {

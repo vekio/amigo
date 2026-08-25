@@ -13,12 +13,18 @@ type Handler[In, Out any] func(context.Context, In) (Out, error)
 func handlerHTTP[In, Out any](
 	handler Handler[In, Out],
 	metadata *InputMetadata,
+	validators validatorRegistry,
 	errorHandler ErrorHandler,
 ) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		input, err := bindInput[In](req, metadata)
 		if err != nil {
 			errorHandler(w, req, ErrorPhaseBinding, err)
+			return
+		}
+
+		if err := validateInput(input, metadata, validators); err != nil {
+			errorHandler(w, req, ErrorPhaseValidation, err)
 			return
 		}
 

@@ -13,6 +13,7 @@ type API struct {
 	operations   []*Operation
 	mux          *http.ServeMux
 	errorHandler ErrorHandler
+	validators   validatorRegistry
 	buildOnce    sync.Once
 	built        bool
 	buildFailure any
@@ -23,6 +24,7 @@ func New() *API {
 	return &API{
 		root:         NewRouter(),
 		errorHandler: DefaultErrorHandler,
+		validators:   make(validatorRegistry),
 	}
 }
 

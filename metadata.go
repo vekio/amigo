@@ -32,9 +32,10 @@ func (source ParameterSource) String() string {
 
 // InputMetadata describes how an input type is populated from an HTTP request.
 type InputMetadata struct {
-	Type       reflect.Type
-	Parameters []ParameterMetadata
-	Body       *BodyMetadata
+	Type        reflect.Type
+	Parameters  []ParameterMetadata
+	Body        *BodyMetadata
+	Validations []ValidationMetadata
 }
 
 // ParameterMetadata describes one path, query, header, or cookie parameter.
@@ -54,6 +55,15 @@ type BodyMetadata struct {
 	Required bool
 
 	index int
+}
+
+// ValidationMetadata describes the named rules applied to one input field.
+type ValidationMetadata struct {
+	Location string
+	Type     reflect.Type
+	Rules    []string
+
+	index []int
 }
 
 // OutputMetadata describes the value returned by a handler.
@@ -76,6 +86,12 @@ func (metadata *InputMetadata) clone() *InputMetadata {
 	if metadata.Body != nil {
 		body := *metadata.Body
 		cloned.Body = &body
+	}
+	cloned.Validations = make([]ValidationMetadata, len(metadata.Validations))
+	for index, validation := range metadata.Validations {
+		cloned.Validations[index] = validation
+		cloned.Validations[index].index = append([]int(nil), validation.index...)
+		cloned.Validations[index].Rules = append([]string(nil), validation.Rules...)
 	}
 	return &cloned
 }

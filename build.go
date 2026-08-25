@@ -59,10 +59,14 @@ func (api *API) buildRouter(
 	for _, route := range router.routes {
 		input := route.Input.clone()
 		output := route.Output.clone()
-		handler := route.handlerFactory(input, api.errorHandler)
+		operationPath := joinPath(current.prefix, route.Path)
+		if err := validateRules(input, api.validators); err != nil {
+			panic("amigo: " + route.Method + " " + operationPath + ": " + err.Error())
+		}
+		handler := route.buildHandler(input, api.validators, api.errorHandler)
 		operation := &Operation{
 			Method:  route.Method,
-			Path:    joinPath(current.prefix, route.Path),
+			Path:    operationPath,
 			Tags:    slices.Concat(current.tags, route.Tags),
 			Input:   input,
 			Output:  output,
