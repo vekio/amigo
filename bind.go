@@ -41,6 +41,9 @@ func bindInput[In any](req *http.Request, metadata *InputMetadata) (In, error) {
 			if errors.Is(err, errUnsupportedMediaType) {
 				return input, err
 			}
+			if _, ok := errors.AsType[*http.MaxBytesError](err); ok {
+				return input, err
+			}
 			validation.Errors = append(validation.Errors, bodyFieldError(err))
 		}
 	}

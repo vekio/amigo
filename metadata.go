@@ -68,14 +68,12 @@ type ValidationMetadata struct {
 
 // OutputMetadata describes the value returned by a handler.
 type OutputMetadata struct {
-	Type reflect.Type
+	Type   reflect.Type
+	Status int
 }
 
-func (metadata *InputMetadata) clone() *InputMetadata {
-	if metadata == nil {
-		return nil
-	}
-	cloned := *metadata
+func (metadata InputMetadata) clone() InputMetadata {
+	cloned := metadata
 	cloned.Parameters = append([]ParameterMetadata(nil), metadata.Parameters...)
 	for index := range cloned.Parameters {
 		if cloned.Parameters[index].Default != nil {
@@ -93,13 +91,5 @@ func (metadata *InputMetadata) clone() *InputMetadata {
 		cloned.Validations[index].index = append([]int(nil), validation.index...)
 		cloned.Validations[index].Rules = append([]string(nil), validation.Rules...)
 	}
-	return &cloned
-}
-
-func (metadata *OutputMetadata) clone() *OutputMetadata {
-	if metadata == nil {
-		return nil
-	}
-	cloned := *metadata
-	return &cloned
+	return cloned
 }

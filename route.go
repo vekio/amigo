@@ -9,19 +9,25 @@ import (
 
 // route describes an HTTP endpoint relative to its Router.
 type route struct {
-	Method string
-	Path   string
-	Tags   []string
-	Input  *InputMetadata
-	Output *OutputMetadata
+	method string
+	path   string
+	tags   []string
+	input  InputMetadata
+	output OutputMetadata
 
 	buildHandler handlerBuilder
+	middleware   []Middleware
 }
 
-type handlerBuilder func(*InputMetadata, validatorRegistry, ErrorHandler) http.Handler
+type handlerConfig struct {
+	validators   validatorRegistry
+	errorHandler ErrorHandler
+	maxBodyBytes int64
+}
+
+type handlerBuilder func(InputMetadata, OutputMetadata, handlerConfig) http.Handler
 
 func register[In, Out any](router *Router, method, path string, handler Handler[In, Out], options ...RouteOption) {
-	router.assertMutable()
 	if handler == nil {
 		panic(fmt.Sprintf("amigo: %s %s: handler is nil", method, path))
 	}
@@ -31,21 +37,21 @@ func register[In, Out any](router *Router, method, path string, handler Handler[
 		panic(fmt.Sprintf("amigo: %s %s: %v", method, path, err))
 	}
 
-	registered := &route{
-		Method: method,
-		Path:   path,
-		Input:  input,
-		Output: inspectOutput(reflect.TypeFor[Out]()),
+	registered := route{
+		method: method,
+		path:   path,
+		input:  input,
+		output: inspectOutput(reflect.TypeFor[Out]()),
 		buildHandler: func(
-			metadata *InputMetadata,
-			validators validatorRegistry,
-			errorHandler ErrorHandler,
+			input InputMetadata,
+			output OutputMetadata,
+			config handlerConfig,
 		) http.Handler {
-			return handlerHTTP(handler, metadata, validators, errorHandler)
+			return handlerHTTP(handler, input, output, config)
 		},
 	}
 	for _, option := range options {
-		option.applyRoute(registered)
+		option.applyRoute(&registered)
 	}
 	router.addRoute(registered)
 }

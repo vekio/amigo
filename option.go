@@ -39,5 +39,18 @@ func (tags tagsOption) applyRouter(router *Router) {
 }
 
 func (tags tagsOption) applyRoute(route *route) {
-	route.Tags = append(route.Tags, tags...)
+	route.tags = append(route.tags, tags...)
+}
+
+type statusOption int
+
+// Status sets the successful HTTP status returned by a route. It must be in
+// the 200-299 range. Statuses 204 and 205 suppress response encoding and the
+// body.
+func Status(status int) RouteOption {
+	return statusOption(status)
+}
+
+func (status statusOption) applyRoute(route *route) {
+	route.output.Status = int(status)
 }

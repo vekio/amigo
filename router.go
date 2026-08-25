@@ -3,19 +3,20 @@ package amigo
 import (
 	"fmt"
 	"net/http"
+	"slices"
 )
 
-// Router groups routes, middleware, and child routers. Configure it from one
-// goroutine before the API is built; serving requests does not mutate it.
+// Router groups routes, middleware, and snapshots of included routers. Configure
+// it from one goroutine. Including it in another Router or API copies its current
+// state, so it can be changed and reused afterwards without affecting that copy.
 type Router struct {
 	prefix string
 	tags   []string
 
-	routes       []*route
-	routers      []*Router
-	staticMounts []staticMount
-	middleware   []Middleware
-	frozen       bool
+	routes          []route
+	staticMounts    []staticMount
+	middleware      []Middleware
+	includedRouters map[*Router]struct{}
 }
 
 // NewRouter creates a group of related routes.
@@ -52,18 +53,40 @@ func (router *Router) DELETE[In, Out any](path string, handler Handler[In, Out],
 	register(router, http.MethodDelete, path, handler, options...)
 }
 
-// Include adds a child Router.
+// Include adds a snapshot of a child Router.
 func (router *Router) Include(child *Router) {
-	router.assertMutable()
 	if child == nil {
 		panic("amigo: cannot include a nil router")
 	}
-	router.routers = append(router.routers, child)
+	if child == router || child.contains(router) {
+		panic("amigo: router inclusion cycle detected")
+	}
+
+	for _, childRoute := range child.routes {
+		snapshot := childRoute
+		snapshot.path = joinPath(child.prefix, snapshot.path)
+		snapshot.tags = slices.Concat(child.tags, snapshot.tags)
+		snapshot.middleware = slices.Concat(child.middleware, snapshot.middleware)
+		router.routes = append(router.routes, snapshot)
+	}
+	for _, childMount := range child.staticMounts {
+		snapshot := childMount
+		snapshot.path = joinPath(child.prefix, snapshot.path)
+		snapshot.middleware = slices.Concat(child.middleware, snapshot.middleware)
+		router.staticMounts = append(router.staticMounts, snapshot)
+	}
+
+	if router.includedRouters == nil {
+		router.includedRouters = make(map[*Router]struct{})
+	}
+	router.includedRouters[child] = struct{}{}
+	for included := range child.includedRouters {
+		router.includedRouters[included] = struct{}{}
+	}
 }
 
-// Use adds middleware to every route in the router and its children.
+// Use adds middleware to every route in the router, including router snapshots.
 func (router *Router) Use(middleware ...Middleware) {
-	router.assertMutable()
 	for index, current := range middleware {
 		if current == nil {
 			panic(fmt.Sprintf("amigo: middleware at index %d is nil", index))
@@ -72,13 +95,14 @@ func (router *Router) Use(middleware ...Middleware) {
 	}
 }
 
-func (router *Router) addRoute(route *route) {
-	router.assertMutable()
+func (router *Router) addRoute(route route) {
 	router.routes = append(router.routes, route)
 }
 
-func (router *Router) assertMutable() {
-	if router.frozen {
-		panic("amigo: cannot modify a router after its API has been built")
+func (router *Router) contains(target *Router) bool {
+	if router == target {
+		return true
 	}
+	_, exists := router.includedRouters[target]
+	return exists
 }

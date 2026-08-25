@@ -169,6 +169,7 @@ func EncodingError(_ context.Context, _ NoInput) (EncodingErrorOutput, error) {
 
 func main() {
 	app := amigo.New()
+	app.SetMaxBodyBytes(1 << 20)
 	static, err := fs.Sub(staticFiles, "static")
 	if err != nil {
 		log.Fatal(err)
@@ -208,7 +209,7 @@ func main() {
 
 	api.Use(loggingMiddleware)
 	users.GET("", ListUsers, amigo.Tags("list"))
-	users.POST("", CreateUser, amigo.Tags("create"))
+	users.POST("", CreateUser, amigo.Tags("create"), amigo.Status(http.StatusCreated))
 	users.GET("/{id}", GetUser, amigo.Tags("read"))
 	errorRoutes.GET("/encoding", EncodingError, amigo.Tags("encoding"))
 	errorRoutes.GET("/{kind}", ErrorDemo, amigo.Tags("demo"))
@@ -226,7 +227,18 @@ func main() {
 	log.Println(`private error: curl http://localhost:8080/api/errors/private`)
 	log.Println(`encoding error: curl http://localhost:8080/api/errors/encoding`)
 	log.Println(`try: curl -H "Authorization: Bearer demo" --cookie "session=abc" http://localhost:8080/api/users/01941f29-7c00-7d00-a5c9-345f08c39fbd`)
-	log.Fatal(app.Run(":8080"))
+	handler, err := app.Compile()
+	if err != nil {
+		log.Fatal(err)
+	}
+	server := &http.Server{
+		Addr:              ":8080",
+		Handler:           handler,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      10 * time.Second,
+	}
+	log.Fatal(server.ListenAndServe())
 }
 
 func exampleErrorHandler(

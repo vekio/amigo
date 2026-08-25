@@ -2,59 +2,60 @@ package amigo
 
 import (
 	"fmt"
+	"net/http"
 	"reflect"
 	"strings"
 )
 
-func inspectInput(inputType reflect.Type) (*InputMetadata, error) {
+func inspectInput(inputType reflect.Type) (InputMetadata, error) {
 	if inputType.Kind() != reflect.Struct {
-		return nil, fmt.Errorf("input must be a struct, got %s", inputType.Kind())
+		return InputMetadata{}, fmt.Errorf("input must be a struct, got %s", inputType.Kind())
 	}
 
-	metadata := &InputMetadata{Type: inputType}
+	metadata := InputMetadata{Type: inputType}
 	for i := range inputType.NumField() {
 		field := inputType.Field(i)
 		source, name, parameter, err := inspectParameter(field)
 		if err != nil {
-			return nil, err
+			return InputMetadata{}, err
 		}
 		if parameter && !field.IsExported() {
-			return nil, fmt.Errorf("parameter field %q must be exported", field.Name)
+			return InputMetadata{}, fmt.Errorf("parameter field %q must be exported", field.Name)
 		}
 
 		if field.Name == "Body" {
 			if parameter {
-				return nil, fmt.Errorf("field %q cannot be both body and %s parameter", field.Name, source)
+				return InputMetadata{}, fmt.Errorf("field %q cannot be both body and %s parameter", field.Name, source)
 			}
 			if _, ok := field.Tag.Lookup("default"); ok {
-				return nil, fmt.Errorf("body field %q cannot have a default", field.Name)
+				return InputMetadata{}, fmt.Errorf("body field %q cannot have a default", field.Name)
 			}
 			metadata.Body = &BodyMetadata{
 				Type:     field.Type,
 				Required: field.Type.Kind() != reflect.Pointer,
 				index:    i,
 			}
-			if err := inspectValidation(field, "body", []int{i}, metadata); err != nil {
-				return nil, err
+			if err := inspectValidation(field, "body", []int{i}, &metadata); err != nil {
+				return InputMetadata{}, err
 			}
-			if err := inspectBodyValidations(field.Type, "body", []int{i}, metadata); err != nil {
-				return nil, err
+			if err := inspectBodyValidations(field.Type, "body", []int{i}, &metadata); err != nil {
+				return InputMetadata{}, err
 			}
 			continue
 		}
 
 		if !parameter {
 			if _, ok := field.Tag.Lookup("default"); ok {
-				return nil, fmt.Errorf("field %q has a default but is not a query parameter", field.Name)
+				return InputMetadata{}, fmt.Errorf("field %q has a default but is not a query parameter", field.Name)
 			}
 			if _, ok := field.Tag.Lookup("validate"); ok {
-				return nil, fmt.Errorf("field %q has validation rules but is not a request parameter", field.Name)
+				return InputMetadata{}, fmt.Errorf("field %q has validation rules but is not a request parameter", field.Name)
 			}
 			continue
 		}
 		if source != ParameterQuery {
 			if _, ok := field.Tag.Lookup("default"); ok {
-				return nil, fmt.Errorf("%s parameter field %q cannot have a default", source, field.Name)
+				return InputMetadata{}, fmt.Errorf("%s parameter field %q cannot have a default", source, field.Name)
 			}
 		}
 
@@ -73,8 +74,8 @@ func inspectInput(inputType reflect.Type) (*InputMetadata, error) {
 
 		metadata.Parameters = append(metadata.Parameters, parameterMetadata)
 		location := source.String() + "." + name
-		if err := inspectValidation(field, location, []int{i}, metadata); err != nil {
-			return nil, err
+		if err := inspectValidation(field, location, []int{i}, &metadata); err != nil {
+			return InputMetadata{}, err
 		}
 	}
 
@@ -211,6 +212,9 @@ func parameterRequired(source ParameterSource, fieldType reflect.Type) bool {
 	return fieldType.Kind() != reflect.Pointer
 }
 
-func inspectOutput(outputType reflect.Type) *OutputMetadata {
-	return &OutputMetadata{Type: outputType}
+func inspectOutput(outputType reflect.Type) OutputMetadata {
+	return OutputMetadata{
+		Type:   outputType,
+		Status: http.StatusOK,
+	}
 }

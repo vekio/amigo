@@ -2,6 +2,7 @@ package amigo
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -109,7 +110,7 @@ func TestNestedRoutersInheritPrefixTagsAndMiddleware(t *testing.T) {
 	}
 }
 
-func TestAPIAndRoutersFreezeAfterBuild(t *testing.T) {
+func TestAPIFreezesAfterBuild(t *testing.T) {
 	api := New()
 	child := NewRouter()
 	child.GET("/items", func(_ context.Context, _ emptyInput) (struct{}, error) { return struct{}{}, nil })
@@ -125,18 +126,98 @@ func TestAPIAndRoutersFreezeAfterBuild(t *testing.T) {
 		}},
 		{name: "API include", run: func() { api.Include(NewRouter()) }},
 		{name: "API middleware", run: func() { api.Use(func(http.ResponseWriter, *http.Request, http.Handler) {}) }},
-		{name: "child route", run: func() {
-			child.GET("/late", func(_ context.Context, _ emptyInput) (struct{}, error) { return struct{}{}, nil })
-		}},
-		{name: "child include", run: func() { child.Include(NewRouter()) }},
-		{name: "child middleware", run: func() { child.Use(func(http.ResponseWriter, *http.Request, http.Handler) {}) }},
 		{name: "error handler", run: func() { api.SetErrorHandler(nil) }},
 		{name: "validator", run: func() { api.Validator("late", func(int) error { return nil }) }},
+		{name: "maximum body size", run: func() { api.SetMaxBodyBytes(1024) }},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			requirePanicContains(t, "API has been built", test.run)
 		})
+	}
+}
+
+func TestRouterIncludeUsesSnapshot(t *testing.T) {
+	var lateMiddlewareCalls int
+	child := NewRouter(Prefix("/children"), Tags("children"))
+	child.GET("/first", func(_ context.Context, _ emptyInput) (struct{}, error) {
+		return struct{}{}, nil
+	})
+
+	parent := NewRouter(Prefix("/api"), Tags("api"))
+	parent.Include(child)
+
+	child.GET("/late", func(_ context.Context, _ emptyInput) (struct{}, error) {
+		return struct{}{}, nil
+	})
+	child.Use(func(w http.ResponseWriter, req *http.Request, next http.Handler) {
+		lateMiddlewareCalls++
+		next.ServeHTTP(w, req)
+	})
+
+	api := New()
+	api.Include(parent)
+
+	parent.GET("/also-late", func(_ context.Context, _ emptyInput) (struct{}, error) {
+		return struct{}{}, nil
+	})
+	parent.Include(NewRouter(Prefix("/late-router")))
+	parent.Use(func(http.ResponseWriter, *http.Request, http.Handler) {
+		lateMiddlewareCalls++
+	})
+
+	response := request(t, api, http.MethodGet, "/api/children/first", nil, nil)
+	if response.Code != http.StatusOK {
+		t.Fatalf("snapshot route status=%d body=%s", response.Code, response.Body.String())
+	}
+	if lateMiddlewareCalls != 0 {
+		t.Fatalf("late middleware calls=%d", lateMiddlewareCalls)
+	}
+	for _, path := range []string{"/api/children/late", "/api/also-late"} {
+		response := request(t, api, http.MethodGet, path, nil, nil)
+		if response.Code != http.StatusNotFound {
+			t.Fatalf("late route %s status=%d", path, response.Code)
+		}
+	}
+
+	operations := api.Operations()
+	if len(operations) != 1 {
+		t.Fatalf("operations=%d", len(operations))
+	}
+	if !reflect.DeepEqual(operations[0].Tags, []string{"api", "children"}) {
+		t.Fatalf("tags=%#v", operations[0].Tags)
+	}
+}
+
+func TestAPIConfigurationAfterIncludeIsAppliedAtBuild(t *testing.T) {
+	type input struct {
+		Page int `query:"page" validate:"positive"`
+	}
+
+	router := NewRouter(Prefix("/api"))
+	router.GET("/items", func(_ context.Context, input input) (int, error) {
+		return input.Page, nil
+	})
+
+	api := New()
+	api.Include(router)
+	api.Validator("positive", func(value int) error {
+		if value < 1 {
+			return errors.New("must be positive")
+		}
+		return nil
+	})
+	api.Use(func(w http.ResponseWriter, req *http.Request, next http.Handler) {
+		w.Header().Set("X-Configured-After-Include", "true")
+		next.ServeHTTP(w, req)
+	})
+
+	response := request(t, api, http.MethodGet, "/api/items?page=2", nil, nil)
+	if response.Code != http.StatusOK || response.Body.String() != "2" {
+		t.Fatalf("status=%d body=%q", response.Code, response.Body.String())
+	}
+	if got := response.Header().Get("X-Configured-After-Include"); got != "true" {
+		t.Fatalf("middleware header=%q", got)
 	}
 }
 
@@ -166,11 +247,11 @@ func TestRouterCycleAndDuplicatePatternsFailBuild(t *testing.T) {
 		first := NewRouter(Prefix("/first"))
 		second := NewRouter(Prefix("/second"))
 		first.Include(second)
-		second.Include(first)
-		api := New()
-		api.Include(first)
 		requirePanicContains(t, "router inclusion cycle detected", func() {
-			api.Handler()
+			second.Include(first)
+		})
+		requirePanicContains(t, "router inclusion cycle detected", func() {
+			first.Include(first)
 		})
 	})
 

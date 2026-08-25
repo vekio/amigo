@@ -71,10 +71,14 @@ func DefaultErrorHandler(
 		}
 	} else if phase == ErrorPhaseBinding {
 		status := http.StatusBadRequest
-		if errors.Is(err, errUnsupportedMediaType) {
+		detail := err.Error()
+		if _, ok := errors.AsType[*http.MaxBytesError](err); ok {
+			status = http.StatusRequestEntityTooLarge
+			detail = "request body exceeds the maximum allowed size"
+		} else if errors.Is(err, errUnsupportedMediaType) {
 			status = http.StatusUnsupportedMediaType
 		}
-		problem = NewProblem(status, err.Error())
+		problem = NewProblem(status, detail)
 	} else {
 		logRequestError(req, phase, err)
 		problem = InternalServerError("internal server error")
