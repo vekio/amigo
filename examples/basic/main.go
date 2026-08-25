@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"embed"
 	"errors"
+	"io/fs"
 	"log"
 	"net/http"
 	"time"
@@ -10,6 +12,9 @@ import (
 
 	"github.com/vekio/amigo"
 )
+
+//go:embed static
+var staticFiles embed.FS
 
 type GetUserInput struct {
 	ID            uuid.UUID `path:"id"`
@@ -164,6 +169,11 @@ func EncodingError(_ context.Context, _ NoInput) (EncodingErrorOutput, error) {
 
 func main() {
 	app := amigo.New()
+	static, err := fs.Sub(staticFiles, "static")
+	if err != nil {
+		log.Fatal(err)
+	}
+	app.Static("/static", static)
 	app.SetErrorHandler(exampleErrorHandler)
 	app.Validator("required", func(value string) error {
 		if value == "" {
@@ -207,6 +217,7 @@ func main() {
 	app.Include(api)
 
 	log.Println("listening on http://localhost:8080")
+	log.Println("static: http://localhost:8080/static/")
 	log.Println(`try: curl "http://localhost:8080/api/users?page=2&limit=10&tags=go&tags=http&since=2026-08-24T10:30:00Z"`)
 	log.Println(`validation: curl -X POST -H "Content-Type: application/json" -d '{"name":"Grace","age":-1,"address":{}}' http://localhost:8080/api/users`)
 	log.Println(`problem: curl http://localhost:8080/api/errors/problem`)

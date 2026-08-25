@@ -11,10 +11,11 @@ type Router struct {
 	prefix string
 	tags   []string
 
-	routes     []*route
-	routers    []*Router
-	middleware []Middleware
-	frozen     bool
+	routes       []*route
+	routers      []*Router
+	staticMounts []staticMount
+	middleware   []Middleware
+	frozen       bool
 }
 
 // NewRouter creates a group of related routes.

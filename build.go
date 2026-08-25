@@ -3,6 +3,7 @@ package amigo
 import (
 	"net/http"
 	"slices"
+	"strings"
 )
 
 type routerContext struct {
@@ -75,6 +76,13 @@ func (api *API) buildRouter(
 
 		*operations = append(*operations, operation)
 		mux.Handle(operation.Method+" "+operation.Path, operation.handler)
+	}
+
+	for _, static := range router.staticMounts {
+		prefix := strings.TrimRight(joinPath(current.prefix, static.path), "/")
+		pattern := prefix + "/"
+		handler := http.StripPrefix(prefix, http.FileServerFS(static.root))
+		mux.Handle(http.MethodGet+" "+pattern, applyMiddleware(handler, current.middleware))
 	}
 
 	for _, child := range router.routers {
