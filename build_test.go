@@ -1,6 +1,92 @@
 package amigo
 
-import "testing"
+import (
+	"reflect"
+	"testing"
+	"time"
+	"uuid"
+)
+
+type EmbeddedInputFields struct {
+	Name string `json:"name"`
+}
+
+func TestBuildInputMetadataRegistersCompleteBody(t *testing.T) {
+	type input struct {
+		ID         string    `path:"id" json:"-"`
+		Search     string    `query:"search" json:"-"`
+		RequestID  string    `header:"X-Request-ID" json:"-"`
+		Name       string    `json:"name" validate:"required"`
+		CreatedAt  time.Time `json:"created_at"`
+		ExternalID uuid.UUID `json:"external_id,omitempty"`
+		Enabled    bool
+		Ignored    string `json:"-"`
+	}
+
+	metadata := buildInputMetadata[input]("/things/{id}", newValidatorRegistry())
+
+	if metadata.body.isEmpty() {
+		t.Fatal("body metadata is empty")
+	}
+	want := []bodyField{
+		{name: "name", fieldID: 3, fieldIndex: []int{3}, fieldType: reflect.TypeFor[string](), jsonTag: "name"},
+		{name: "created_at", fieldID: 4, fieldIndex: []int{4}, fieldType: reflect.TypeFor[time.Time](), jsonTag: "created_at"},
+		{name: "external_id", fieldID: 5, fieldIndex: []int{5}, fieldType: reflect.TypeFor[uuid.UUID](), jsonTag: "external_id,omitempty"},
+		{name: "Enabled", fieldID: 6, fieldIndex: []int{6}, fieldType: reflect.TypeFor[bool](), jsonTag: ""},
+	}
+	if !reflect.DeepEqual(metadata.body.fields, want) {
+		t.Errorf("body fields = %#v, want %#v", metadata.body.fields, want)
+	}
+	if len(metadata.body.indexByName) != len(want) {
+		t.Fatalf("body name index has %d entries, want %d", len(metadata.body.indexByName), len(want))
+	}
+	for index, field := range want {
+		got, exists := metadata.body.indexByName[field.name]
+		if !exists || got != index {
+			t.Errorf("body index for %q = %d, want %d", field.name, got, index)
+		}
+	}
+	if len(metadata.validations) != 1 {
+		t.Errorf("validations = %d, want 1", len(metadata.validations))
+	}
+}
+
+func TestBuildInputMetadataRecognizesMissingBody(t *testing.T) {
+	type input struct {
+		ID string `path:"id" json:"-"`
+	}
+
+	metadata := buildInputMetadata[input]("/things/{id}", newValidatorRegistry())
+
+	if !metadata.body.isEmpty() {
+		t.Errorf("body fields = %#v, want empty", metadata.body.fields)
+	}
+}
+
+func TestBodyMetadataRejectsDuplicateJSONName(t *testing.T) {
+	field := reflect.TypeFor[struct {
+		Value string `json:"value"`
+	}]().Field(0)
+	body := newBodyMetadata()
+	body.add(field, 0, "value")
+
+	assertPanics(t, func() {
+		body.add(field, 1, "value")
+	})
+}
+
+func TestBodyFieldNameRejectsJSONTagOnUnexportedField(t *testing.T) {
+	field := reflect.StructField{
+		Name:    "value",
+		PkgPath: "github.com/vekio/amigo",
+		Type:    reflect.TypeFor[string](),
+		Tag:     `json:"value"`,
+	}
+
+	assertPanics(t, func() {
+		_, _ = bodyFieldName(field)
+	})
+}
 
 func TestBuildInputMetadataRejectsInvalidInput(t *testing.T) {
 	tests := []struct {
@@ -48,7 +134,7 @@ func TestBuildInputMetadataRejectsInvalidInput(t *testing.T) {
 			name: "unsupported path type",
 			build: func() {
 				buildInputMetadata[struct {
-					ID float64 `path:"id" json:"-"`
+					ID complex64 `path:"id" json:"-"`
 				}]("/things/{id}", newValidatorRegistry())
 			},
 		},
@@ -101,7 +187,7 @@ func TestBuildInputMetadataRejectsInvalidInput(t *testing.T) {
 			name: "unsupported query type",
 			build: func() {
 				buildInputMetadata[struct {
-					Filters []float64 `query:"filter" json:"-"`
+					Filters []complex64 `query:"filter" json:"-"`
 				}]("/things", newValidatorRegistry())
 			},
 		},
@@ -135,6 +221,38 @@ func TestBuildInputMetadataRejectsInvalidInput(t *testing.T) {
 				buildInputMetadata[struct {
 					First  string `header:"X-Request-ID" json:"-"`
 					Second string `header:"x-request-id" json:"-"`
+				}]("/things", newValidatorRegistry())
+			},
+		},
+		{
+			name: "parameter with non-exact ignored JSON tag",
+			build: func() {
+				buildInputMetadata[struct {
+					ID string `path:"id" json:"-,omitempty"`
+				}]("/things/{id}", newValidatorRegistry())
+			},
+		},
+		{
+			name: "implicitly embedded JSON field",
+			build: func() {
+				buildInputMetadata[struct {
+					EmbeddedInputFields
+				}]("/things", newValidatorRegistry())
+			},
+		},
+		{
+			name: "explicitly embedded JSON field",
+			build: func() {
+				buildInputMetadata[struct {
+					Details EmbeddedInputFields `json:",embed"`
+				}]("/things", newValidatorRegistry())
+			},
+		},
+		{
+			name: "case-insensitive JSON field",
+			build: func() {
+				buildInputMetadata[struct {
+					Name string `json:"name,case:ignore"`
 				}]("/things", newValidatorRegistry())
 			},
 		},

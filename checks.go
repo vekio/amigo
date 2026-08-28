@@ -46,7 +46,7 @@ func checkPathField(
 	if !supportsScalarParameterType(field.Type) {
 		panic(fmt.Sprintf("amigo: path parameter %q has unsupported type %s", name, field.Type))
 	}
-	if jsonTagName(field.Tag.Get("json")) != "-" {
+	if field.Tag.Get("json") != "-" {
 		panic(fmt.Sprintf("amigo: path field %s must use json:\"-\"", field.Name))
 	}
 }
@@ -69,7 +69,7 @@ func checkInputParameterField(
 	if !supportsInputParameterType(source, field.Type) {
 		panic(fmt.Sprintf("amigo: %s parameter %q has unsupported type %s", source, name, field.Type))
 	}
-	if jsonTagName(field.Tag.Get("json")) != "-" {
+	if field.Tag.Get("json") != "-" {
 		panic(fmt.Sprintf("amigo: %s field %s must use json:\"-\"", source, field.Name))
 	}
 }
@@ -91,7 +91,7 @@ func checkOutputHeaderField(field reflect.StructField, name string) {
 	if field.Type.Kind() != reflect.String {
 		panic(fmt.Sprintf("amigo: response header %q must be a string", name))
 	}
-	if jsonTagName(field.Tag.Get("json")) != "-" {
+	if field.Tag.Get("json") != "-" {
 		panic(fmt.Sprintf("amigo: header field %s must use json:\"-\"", field.Name))
 	}
 }
@@ -110,7 +110,8 @@ func supportsScalarParameterType(valueType reflect.Type) bool {
 	switch valueType.Kind() {
 	case reflect.String, reflect.Bool,
 		reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
-		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64,
+		reflect.Float32, reflect.Float64:
 		return true
 	default:
 		return false

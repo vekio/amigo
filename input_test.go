@@ -4,9 +4,11 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 	"uuid"
 )
 
@@ -17,7 +19,7 @@ func TestBindInputDecodesJSON(t *testing.T) {
 	request := httptest.NewRequest(http.MethodPost, "/things", strings.NewReader(`{"name":"shorty"}`))
 	request.Header.Set("Content-Type", "application/json; charset=utf-8")
 
-	input, err := bindInput[inputBody](request, buildInputMetadata[inputBody]("/things", newValidatorRegistry()))
+	input, err := bindInputValue[inputBody](request, buildInputMetadata[inputBody]("/things", newValidatorRegistry()))
 
 	if err != nil {
 		t.Fatalf("bindInput() error = %v", err)
@@ -27,11 +29,34 @@ func TestBindInputDecodesJSON(t *testing.T) {
 	}
 }
 
+func TestBindInputDecodesSpecialJSONTypes(t *testing.T) {
+	wantID := uuid.MustParse("f81d4fae-7dec-11d0-a765-00a0c91e6bf6")
+	wantCreatedAt := time.Date(2026, time.August, 28, 14, 30, 45, 0, time.UTC)
+	type inputBody struct {
+		ID        uuid.UUID `json:"id"`
+		CreatedAt time.Time `json:"created_at"`
+	}
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/things",
+		strings.NewReader(`{"id":"f81d4fae-7dec-11d0-a765-00a0c91e6bf6","created_at":"2026-08-28T14:30:45Z"}`),
+	)
+	request.Header.Set("Content-Type", "application/json")
+
+	input, err := bindInputValue[inputBody](request, buildInputMetadata[inputBody]("/things", newValidatorRegistry()))
+	if err != nil {
+		t.Fatalf("bindInput() error = %v", err)
+	}
+	if input.ID != wantID || !input.CreatedAt.Equal(wantCreatedAt) {
+		t.Errorf("input = %#v, want ID %s and CreatedAt %s", input, wantID, wantCreatedAt)
+	}
+}
+
 func TestBindInputAllowsMissingBody(t *testing.T) {
 	type inputBody struct{ Name string }
 	request := httptest.NewRequest(http.MethodGet, "/things", nil)
 
-	input, err := bindInput[inputBody](request, buildInputMetadata[inputBody]("/things", newValidatorRegistry()))
+	input, err := bindInputValue[inputBody](request, buildInputMetadata[inputBody]("/things", newValidatorRegistry()))
 
 	if err != nil {
 		t.Fatalf("bindInput() error = %v", err)
@@ -64,7 +89,7 @@ func TestBindInputRejectsInvalidJSONRequests(t *testing.T) {
 				request.Header.Set("Content-Type", test.contentType)
 			}
 
-			_, err := bindInput[inputBody](request, buildInputMetadata[inputBody]("/things", newValidatorRegistry()))
+			_, err := bindInputValue[inputBody](request, buildInputMetadata[inputBody]("/things", newValidatorRegistry()))
 			problem, ok := errors.AsType[*problem](err)
 			if !ok {
 				t.Fatalf("error = %T, want *problem", err)
@@ -83,7 +108,7 @@ func TestBindInputBindsPathParameter(t *testing.T) {
 	request := httptest.NewRequest(http.MethodGet, "/things/42", nil)
 	request.SetPathValue("id", "42")
 
-	input, err := bindInput[inputBody](request, buildInputMetadata[inputBody]("/things/{id}", newValidatorRegistry()))
+	input, err := bindInputValue[inputBody](request, buildInputMetadata[inputBody]("/things/{id}", newValidatorRegistry()))
 
 	if err != nil {
 		t.Fatalf("bindInput() error = %v", err)
@@ -104,7 +129,7 @@ func TestBindInputBindsQueryAndHeaderParameters(t *testing.T) {
 	request.Header.Set("x-request-id", "request-42")
 	request.Header.Set("X-Preview", "true")
 
-	got, err := bindInput[input](request, buildInputMetadata[input]("/things", newValidatorRegistry()))
+	got, err := bindInputValue[input](request, buildInputMetadata[input]("/things", newValidatorRegistry()))
 	if err != nil {
 		t.Fatalf("bindInput() error = %v", err)
 	}
@@ -133,7 +158,7 @@ func TestBindInputBindsUUIDParameters(t *testing.T) {
 	request.SetPathValue("id", pathID.String())
 	request.Header.Set("X-Request-ID", requestID.String())
 
-	got, err := bindInput[input](request, buildInputMetadata[input]("/things/{id}", newValidatorRegistry()))
+	got, err := bindInputValue[input](request, buildInputMetadata[input]("/things/{id}", newValidatorRegistry()))
 	if err != nil {
 		t.Fatalf("bindInput() error = %v", err)
 	}
@@ -148,13 +173,45 @@ func TestBindInputBindsUUIDParameters(t *testing.T) {
 	}
 }
 
+func TestBindInputBindsTimeParameters(t *testing.T) {
+	startsAt := time.Date(2026, time.August, 28, 14, 30, 45, 0, time.UTC)
+	endsAt := time.Date(2026, time.August, 29, 16, 15, 0, 0, time.FixedZone("CEST", 2*60*60))
+	type input struct {
+		StartsAt time.Time   `path:"starts_at" json:"-"`
+		EndsAt   time.Time   `query:"ends_at" json:"-"`
+		Windows  []time.Time `query:"window" json:"-"`
+		SentAt   time.Time   `header:"X-Sent-At" json:"-"`
+	}
+	request := httptest.NewRequest(
+		http.MethodGet,
+		"/events/"+startsAt.Format(time.RFC3339)+"?ends_at="+url.QueryEscape(endsAt.Format(time.RFC3339))+"&window="+url.QueryEscape(startsAt.Format(time.RFC3339))+"&window="+url.QueryEscape(endsAt.Format(time.RFC3339)),
+		nil,
+	)
+	request.SetPathValue("starts_at", startsAt.Format(time.RFC3339))
+	request.Header.Set("X-Sent-At", startsAt.Format(time.RFC3339))
+
+	got, err := bindInputValue[input](request, buildInputMetadata[input]("/events/{starts_at}", newValidatorRegistry()))
+	if err != nil {
+		t.Fatalf("bindInput() error = %v", err)
+	}
+	if !got.StartsAt.Equal(startsAt) || !got.EndsAt.Equal(endsAt) || !got.SentAt.Equal(startsAt) {
+		t.Errorf("input times = %#v", got)
+	}
+	if len(got.Windows) != 2 || !got.Windows[0].Equal(startsAt) || !got.Windows[1].Equal(endsAt) {
+		t.Errorf("windows = %#v, want [%s %s]", got.Windows, startsAt, endsAt)
+	}
+	if got.EndsAt.Format(time.RFC3339) != endsAt.Format(time.RFC3339) {
+		t.Errorf("ends_at = %s, want %s", got.EndsAt.Format(time.RFC3339), endsAt.Format(time.RFC3339))
+	}
+}
+
 func TestBindInputRejectsInvalidUUIDParameter(t *testing.T) {
 	type input struct {
 		ID uuid.UUID `query:"id" json:"-"`
 	}
 	request := httptest.NewRequest(http.MethodGet, "/things?id=not-a-uuid", nil)
 
-	_, err := bindInput[input](request, buildInputMetadata[input]("/things", newValidatorRegistry()))
+	_, err := bindInputValue[input](request, buildInputMetadata[input]("/things", newValidatorRegistry()))
 	problem, ok := errors.AsType[*problem](err)
 	if !ok {
 		t.Fatalf("error = %T, want *problem", err)
@@ -171,7 +228,7 @@ func TestBindInputLeavesAbsentQueryAndHeaderParametersAtZeroValue(t *testing.T) 
 	}
 	request := httptest.NewRequest(http.MethodGet, "/things", nil)
 
-	got, err := bindInput[input](request, buildInputMetadata[input]("/things", newValidatorRegistry()))
+	got, err := bindInputValue[input](request, buildInputMetadata[input]("/things", newValidatorRegistry()))
 	if err != nil {
 		t.Fatalf("bindInput() error = %v", err)
 	}
@@ -193,7 +250,7 @@ func TestBindInputCollectsRepeatedQueryValuesIntoSlices(t *testing.T) {
 		nil,
 	)
 
-	got, err := bindInput[input](request, buildInputMetadata[input]("/things", newValidatorRegistry()))
+	got, err := bindInputValue[input](request, buildInputMetadata[input]("/things", newValidatorRegistry()))
 	if err != nil {
 		t.Fatalf("bindInput() error = %v", err)
 	}
@@ -214,7 +271,7 @@ func TestBindInputDoesNotSplitCommaSeparatedQueryValues(t *testing.T) {
 	}
 	request := httptest.NewRequest(http.MethodGet, "/things?tag=go,http", nil)
 
-	got, err := bindInput[input](request, buildInputMetadata[input]("/things", newValidatorRegistry()))
+	got, err := bindInputValue[input](request, buildInputMetadata[input]("/things", newValidatorRegistry()))
 	if err != nil {
 		t.Fatalf("bindInput() error = %v", err)
 	}
@@ -230,7 +287,7 @@ func TestBindInputRejectsRepeatedScalarQueryParameter(t *testing.T) {
 	}
 	request := httptest.NewRequest(http.MethodGet, "/things?tag=go&tag=http", nil)
 
-	_, err := bindInput[input](request, buildInputMetadata[input]("/things", newValidatorRegistry()))
+	_, err := bindInputValue[input](request, buildInputMetadata[input]("/things", newValidatorRegistry()))
 	problem, ok := errors.AsType[*problem](err)
 	if !ok {
 		t.Fatalf("error = %T, want *problem", err)
@@ -246,7 +303,7 @@ func TestBindInputRejectsInvalidQuerySliceElement(t *testing.T) {
 	}
 	request := httptest.NewRequest(http.MethodGet, "/things?page=1&page=many", nil)
 
-	_, err := bindInput[input](request, buildInputMetadata[input]("/things", newValidatorRegistry()))
+	_, err := bindInputValue[input](request, buildInputMetadata[input]("/things", newValidatorRegistry()))
 	problem, ok := errors.AsType[*problem](err)
 	if !ok {
 		t.Fatalf("error = %T, want *problem", err)
@@ -270,7 +327,7 @@ func TestBindInputReportsInvalidQueryAndHeaderParameters(t *testing.T) {
 				type input struct {
 					Page int `query:"page" json:"-"`
 				}
-				_, err := bindInput[input](request, buildInputMetadata[input]("/things", newValidatorRegistry()))
+				_, err := bindInputValue[input](request, buildInputMetadata[input]("/things", newValidatorRegistry()))
 				return err
 			},
 			wantDetail: `invalid query parameter "page"`,
@@ -286,7 +343,7 @@ func TestBindInputReportsInvalidQueryAndHeaderParameters(t *testing.T) {
 				type input struct {
 					Preview bool `header:"X-Preview" json:"-"`
 				}
-				_, err := bindInput[input](request, buildInputMetadata[input]("/things", newValidatorRegistry()))
+				_, err := bindInputValue[input](request, buildInputMetadata[input]("/things", newValidatorRegistry()))
 				return err
 			},
 			wantDetail: `invalid header parameter "X-Preview"`,
@@ -317,6 +374,13 @@ func TestSetParameterValueSupportsScalarTypes(t *testing.T) {
 		{name: "boolean", type_: reflect.TypeFor[bool](), value: "true", want: true},
 		{name: "signed integer", type_: reflect.TypeFor[int32](), value: "-42", want: int32(-42)},
 		{name: "unsigned integer", type_: reflect.TypeFor[uint16](), value: "42", want: uint16(42)},
+		{name: "floating point", type_: reflect.TypeFor[float64](), value: "3.5", want: 3.5},
+		{
+			name:  "time",
+			type_: reflect.TypeFor[time.Time](),
+			value: "2026-08-28T14:30:45Z",
+			want:  time.Date(2026, time.August, 28, 14, 30, 45, 0, time.UTC),
+		},
 		{
 			name:  "UUID",
 			type_: reflect.TypeFor[uuid.UUID](),
@@ -346,6 +410,8 @@ func TestSetParameterValueRejectsInvalidScalars(t *testing.T) {
 		{name: "boolean", type_: reflect.TypeFor[bool]()},
 		{name: "signed integer", type_: reflect.TypeFor[int]()},
 		{name: "unsigned integer", type_: reflect.TypeFor[uint]()},
+		{name: "floating point", type_: reflect.TypeFor[float64]()},
+		{name: "time", type_: reflect.TypeFor[time.Time]()},
 	}
 
 	for _, test := range tests {
@@ -365,7 +431,7 @@ func TestBindInputReportsInvalidPathParameter(t *testing.T) {
 	request := httptest.NewRequest(http.MethodGet, "/things/not-a-number", nil)
 	request.SetPathValue("id", "not-a-number")
 
-	_, err := bindInput[input](request, buildInputMetadata[input]("/things/{id}", newValidatorRegistry()))
+	_, err := bindInputValue[input](request, buildInputMetadata[input]("/things/{id}", newValidatorRegistry()))
 	problem, ok := errors.AsType[*problem](err)
 	if !ok {
 		t.Fatalf("error = %T, want *problem", err)
@@ -377,6 +443,6 @@ func TestBindInputReportsInvalidPathParameter(t *testing.T) {
 
 func TestSetParameterValuePanicsForUnsupportedType(t *testing.T) {
 	assertPanics(t, func() {
-		_ = setParameterValue(reflect.ValueOf(new(float64)).Elem(), "1.5")
+		_ = setParameterValue(reflect.ValueOf(new(complex64)).Elem(), "1+2i")
 	})
 }

@@ -29,6 +29,7 @@ func (err *validationError) Error() string {
 func buildFieldValidation(
 	field reflect.StructField,
 	fieldID int,
+	location inputLocation,
 	validators validatorRegistry,
 ) (fieldValidation, bool) {
 	tag, tagged := field.Tag.Lookup("validate")
@@ -42,15 +43,14 @@ func buildFieldValidation(
 		panic(fmt.Sprintf("amigo: validation field %s must be exported", field.Name))
 	}
 
-	source, name := inputFieldLocation(field)
-	if source == "" {
+	if location.source == "" {
 		panic(fmt.Sprintf("amigo: validation field %s is not bound from the request", field.Name))
 	}
 
 	validation := fieldValidation{
 		fieldID:    fieldID,
 		fieldIndex: field.Index,
-		location:   source + "." + name,
+		location:   location.label(),
 	}
 	seen := make(map[string]struct{})
 	for ruleName := range strings.SplitSeq(tag, ",") {
@@ -78,23 +78,6 @@ func buildFieldValidation(
 		validation.validators = append(validation.validators, validator)
 	}
 	return validation, true
-}
-
-func inputFieldLocation(field reflect.StructField) (string, string) {
-	for _, source := range []string{"path", "query", "header"} {
-		if name, exists := field.Tag.Lookup(source); exists {
-			return source, name
-		}
-	}
-
-	name := jsonTagName(field.Tag.Get("json"))
-	if name == "-" {
-		return "", ""
-	}
-	if name == "" {
-		name = field.Name
-	}
-	return "body", name
 }
 
 func validateInput(input any, metadata inputMetadata, present fieldSet) error {

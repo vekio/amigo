@@ -14,7 +14,8 @@ import (
 // JSON representations. Input fields may use validate:"required,name" to apply
 // the built-in presence check and validators registered on the API. Query
 // slices collect repeated keys; scalar query fields reject repeated keys.
-// Parameter types implementing encoding.TextUnmarshaler are also supported.
+// Parameter types implementing encoding.TextUnmarshaler are also supported;
+// this includes time.Time (RFC 3339) and uuid.UUID (RFC 9562 text form).
 type EndpointFunc[In, Out any] func(context.Context, In) (Out, error)
 
 // RawEndpointFunc is the escape hatch for endpoints that need direct access to
@@ -33,7 +34,7 @@ func endpointHandler[In, Out any](
 	return func(w http.ResponseWriter, request *http.Request) {
 		limitRequestBody(w, request, route.maxBodyBytes)
 
-		bound, err := bindInputWithPresence[In](request, inputMetadata)
+		bound, err := bindInput[In](request, inputMetadata)
 		if err != nil {
 			writeError(logger, w, request, route, err)
 			return

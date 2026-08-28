@@ -1,1 +1,42 @@
 = amigo
+
+== Type mapping
+
+Typed endpoints map Go values to HTTP representations as follows.
+
+[cols="1,2,2"]
+|===
+|Go type |Path, query and request header |JSON request and response body
+
+|`string`
+|Text
+|JSON string
+
+|`bool`
+|Accepted by `strconv.ParseBool`
+|JSON boolean
+
+|Signed and unsigned integers
+|Base-10 text
+|JSON number
+
+|`float32`, `float64`
+|Floating-point text accepted by `strconv.ParseFloat`
+|JSON number
+
+|`time.Time`
+|RFC 3339 text
+|RFC 3339 JSON string
+
+|`uuid.UUID`
+|UUID text accepted by `uuid.Parse`
+|Canonical UUID JSON string
+
+|Any type implementing `encoding.TextUnmarshaler`
+|The value is passed to `UnmarshalText`
+|Defined by `encoding/json/v2`
+|===
+
+Repeated query parameters can bind to slices of any supported scalar type.
+Path parameters and request headers must be scalar. Fields bound from path,
+query, or headers must use `json:"-"`.

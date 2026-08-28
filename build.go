@@ -10,7 +10,7 @@ type inputMetadata struct {
 	pathParameters   []inputParameter
 	queryParameters  []inputParameter
 	headerParameters []inputParameter
-	bodyFields       map[string]int
+	body             bodyMetadata
 	validations      []fieldValidation
 }
 
@@ -42,11 +42,12 @@ func buildInputMetadata[In any](
 	boundPathNames := make(map[string]struct{}, len(pathNames))
 	boundQueryNames := make(map[string]struct{})
 	boundHeaderNames := make(map[string]struct{})
-	metadata := inputMetadata{bodyFields: make(map[string]int)}
+	metadata := inputMetadata{body: newBodyMetadata()}
 
 	for field := range inputType.Fields() {
 		checkSingleInputSource(field)
 		fieldID := field.Index[0]
+		location := locateInputField(field)
 
 		if parameter, ok := buildPathParameter(field, fieldID, path, pathNames, boundPathNames); ok {
 			metadata.pathParameters = append(metadata.pathParameters, parameter)
@@ -57,11 +58,11 @@ func buildInputMetadata[In any](
 		if parameter, ok := buildInputParameter(field, fieldID, "header", boundHeaderNames); ok {
 			metadata.headerParameters = append(metadata.headerParameters, parameter)
 		}
-		if validation, ok := buildFieldValidation(field, fieldID, validators); ok {
+		if location.source == "body" {
+			metadata.body.add(field, fieldID, location.name)
+		}
+		if validation, ok := buildFieldValidation(field, fieldID, location, validators); ok {
 			metadata.validations = append(metadata.validations, validation)
-			if source, name := inputFieldLocation(field); source == "body" {
-				metadata.bodyFields[name] = fieldID
-			}
 		}
 	}
 
@@ -145,9 +146,4 @@ func routePathNames(path string) map[string]struct{} {
 		}
 	}
 	return names
-}
-
-func jsonTagName(tag string) string {
-	name, _, _ := strings.Cut(tag, ",")
-	return name
 }
