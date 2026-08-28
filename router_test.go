@@ -144,13 +144,10 @@ func TestServeMuxRejectsDuplicateRoutePattern(t *testing.T) {
 	}
 	first.GET("", endpoint)
 
-	defer func() {
-		if recover() == nil {
-			t.Error("duplicate route registration did not panic")
-		}
-	}()
-
-	second.GET("", endpoint)
+	assertPanics(t, func() { second.GET("", endpoint) })
+	if len(api.operations) != 1 {
+		t.Errorf("recorded operations = %d, want 1", len(api.operations))
+	}
 }
 
 func TestRouterRejectsInvalidPrefix(t *testing.T) {

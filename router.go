@@ -3,6 +3,7 @@ package amigo
 import (
 	"fmt"
 	"net/http"
+	"reflect"
 	"slices"
 	"strings"
 )
@@ -63,7 +64,9 @@ func (router *Router) RAW(method string, path string, endpoint RawEndpointFunc, 
 	}
 	route := router.buildRoute(method, path, options...)
 	handler := applyMiddlewares(rawEndpointHandler(router.api.logger, route, endpoint), route.middlewares)
+	router.api.checkOperationID(route.operationID)
 	router.api.mux.Handle(route.pattern(), handler)
+	router.api.operations = append(router.api.operations, route.operation)
 }
 
 func (router *Router) registerEndpoint[In, Out any](
@@ -79,12 +82,18 @@ func (router *Router) registerEndpoint[In, Out any](
 	endpointRoute := router.buildRoute(method, path, options...)
 	input := buildInputMetadata[In](endpointRoute.path, router.api.validators)
 	output := buildOutputMetadata[Out]()
+	endpointRoute.inputType = reflect.TypeFor[In]()
+	endpointRoute.outputType = reflect.TypeFor[Out]()
+	endpointRoute.input = input
+	endpointRoute.output = output
 	handler := endpointHandler(router.api.logger, endpointRoute, input, output, endpoint)
 
+	router.api.checkOperationID(endpointRoute.operationID)
 	router.api.mux.Handle(
 		endpointRoute.pattern(),
 		applyMiddlewares(handler, endpointRoute.middlewares),
 	)
+	router.api.operations = append(router.api.operations, endpointRoute.operation)
 }
 
 // Group creates a child router. Parent middleware is applied before middleware

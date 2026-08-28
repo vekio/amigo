@@ -3,10 +3,13 @@ package amigo
 import (
 	"fmt"
 	"net/http"
+	"slices"
+	"strings"
 )
 
 // RouteOption configures one route when it is registered. Values are created by
-// WithStatus, WithMaxBodyBytes, WithMiddleware, and WithErrorMapping.
+// WithStatus, WithMaxBodyBytes, WithOperationID, WithSummary, WithDescription,
+// WithTags, WithMiddleware, and WithErrorMapping.
 type RouteOption func(*route)
 
 // WithStatus sets the endpoint's successful HTTP status. Only 2xx statuses are
@@ -33,6 +36,64 @@ func WithMaxBodyBytes(limit int64) RouteOption {
 	}
 }
 
+// WithOperationID overrides the identifier generated from the HTTP method and
+// path. Operation identifiers must be unique across the API.
+func WithOperationID(operationID string) RouteOption {
+	if strings.TrimSpace(operationID) == "" {
+		panic("amigo: operation ID cannot be empty")
+	}
+
+	return func(route *route) {
+		route.operationID = operationID
+	}
+}
+
+// WithSummary sets the short human-readable description used for this
+// operation in the OpenAPI document.
+func WithSummary(summary string) RouteOption {
+	if strings.TrimSpace(summary) == "" {
+		panic("amigo: operation summary cannot be empty")
+	}
+
+	return func(route *route) {
+		route.summary = summary
+	}
+}
+
+// WithDescription sets the detailed human-readable description used for this
+// operation in the OpenAPI document.
+func WithDescription(description string) RouteOption {
+	if strings.TrimSpace(description) == "" {
+		panic("amigo: operation description cannot be empty")
+	}
+
+	return func(route *route) {
+		route.description = description
+	}
+}
+
+// WithTags groups this operation under one or more OpenAPI tags. Repeated tags
+// are ignored while preserving declaration order.
+func WithTags(tags ...string) RouteOption {
+	if len(tags) == 0 {
+		panic("amigo: operation tags cannot be empty")
+	}
+	for _, tag := range tags {
+		if strings.TrimSpace(tag) == "" {
+			panic("amigo: operation tag cannot be empty")
+		}
+	}
+	tags = slices.Clone(tags)
+
+	return func(route *route) {
+		for _, tag := range tags {
+			if !slices.Contains(route.tags, tag) {
+				route.tags = append(route.tags, tag)
+			}
+		}
+	}
+}
+
 // WithMiddleware adds middleware to a route in declaration order. Router
 // middleware runs before route middleware.
 func WithMiddleware(middlewares ...Middleware) RouteOption {
@@ -55,7 +116,7 @@ func WithErrorMapping(target error, status int, publicDetail string) RouteOption
 	}
 
 	return func(route *route) {
-		route.errorMappings = append(route.errorMappings, errorMapping{
+		route.errors = append(route.errors, errorMapping{
 			target:       target,
 			status:       status,
 			publicDetail: publicDetail,

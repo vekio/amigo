@@ -14,6 +14,7 @@ import (
 // Routes should be registered during application startup.
 type API struct {
 	mux        *http.ServeMux
+	operations []operation
 	root       *Router
 	logger     *slog.Logger
 	validators validatorRegistry
@@ -34,6 +35,14 @@ func New(options ...APIOption) *API {
 	}
 	api.root = newRouter(api, nil, "", nil)
 	return api
+}
+
+func (app *API) checkOperationID(operationID string) {
+	for _, registered := range app.operations {
+		if registered.operationID == operationID {
+			panic("amigo: operation ID " + operationID + " is registered more than once")
+		}
+	}
 }
 
 // Group creates a child router for prefix. Its middleware is inherited by all

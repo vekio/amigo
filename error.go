@@ -26,7 +26,7 @@ func (r route) resolveProblem(err error) *problem {
 		return problem
 	}
 
-	for _, mapping := range r.errorMappings {
+	for _, mapping := range r.errors {
 		if errors.Is(err, mapping.target) {
 			return newProblem(mapping.status, mapping.publicDetail)
 		}
