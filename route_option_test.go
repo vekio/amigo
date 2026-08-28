@@ -136,8 +136,15 @@ func TestWithErrorMappingRejectsInvalidConfiguration(t *testing.T) {
 	}
 }
 
-func TestWithStatusRejectsNonSuccessStatus(t *testing.T) {
-	for _, status := range []int{http.StatusContinue, http.StatusMultipleChoices} {
+func TestWithStatusAcceptsRedirectStatus(t *testing.T) {
+	route := newRoute(http.MethodGet, "/old", WithStatus(http.StatusTemporaryRedirect))
+	if route.status != http.StatusTemporaryRedirect {
+		t.Errorf("status = %d, want %d", route.status, http.StatusTemporaryRedirect)
+	}
+}
+
+func TestWithStatusRejectsErrorOrInformationalStatus(t *testing.T) {
+	for _, status := range []int{http.StatusContinue, http.StatusBadRequest} {
 		t.Run(http.StatusText(status), func(t *testing.T) {
 			assertPanics(t, func() { WithStatus(status) })
 		})

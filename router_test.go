@@ -185,6 +185,51 @@ func TestRootRouterEmptyPathRegistersSlash(t *testing.T) {
 	}
 }
 
+func TestRouterRejectsJSONOutputForBodylessStatus(t *testing.T) {
+	type output struct {
+		Code string `json:"code"`
+	}
+	endpoint := func(context.Context, struct{}) (output, error) {
+		return output{}, nil
+	}
+
+	for _, status := range []int{http.StatusNoContent, http.StatusResetContent, http.StatusNotModified} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			assertPanics(t, func() {
+				New().GET("/things", endpoint, WithStatus(status))
+			})
+		})
+	}
+}
+
+func TestRouterAllowsHeaderOnlyOutputForBodylessStatus(t *testing.T) {
+	type output struct {
+		Location string `header:"Location" json:"-"`
+	}
+	endpoint := func(context.Context, struct{}) (output, error) {
+		return output{Location: "/other"}, nil
+	}
+
+	for _, status := range []int{http.StatusNoContent, http.StatusResetContent, http.StatusNotModified} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			api := New()
+			api.GET("/things", endpoint, WithStatus(status))
+			response := httptest.NewRecorder()
+			api.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/things", nil))
+
+			if response.Code != status || response.Body.Len() != 0 {
+				t.Errorf("status = %d, body = %q", response.Code, response.Body.String())
+			}
+			if response.Header().Get("Location") != "/other" {
+				t.Errorf("Location = %q", response.Header().Get("Location"))
+			}
+			if response.Header().Get("Content-Type") != "" {
+				t.Errorf("Content-Type = %q, want empty", response.Header().Get("Content-Type"))
+			}
+		})
+	}
+}
+
 func TestRouterRejectsNilEndpoints(t *testing.T) {
 	t.Run("typed", func(t *testing.T) {
 		var endpoint EndpointFunc[struct{}, struct{}]

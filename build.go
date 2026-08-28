@@ -22,6 +22,7 @@ type inputParameter struct {
 
 type outputMetadata struct {
 	headers []outputHeader
+	body    bodyMetadata
 }
 
 type outputHeader struct {
@@ -114,13 +115,16 @@ func buildOutputMetadata[Out any]() outputMetadata {
 		panic(fmt.Sprintf("amigo: endpoint output must be a struct, got %s", outputType))
 	}
 
-	metadata := outputMetadata{}
+	metadata := outputMetadata{body: newBodyMetadata()}
 	for field := range outputType.Fields() {
 		header, ok := buildOutputHeader(field)
-		if !ok {
+		if ok {
+			metadata.headers = append(metadata.headers, header)
 			continue
 		}
-		metadata.headers = append(metadata.headers, header)
+		if name, exists := jsonBodyFieldName(field); exists {
+			metadata.body.add(field, field.Index[0], name)
+		}
 	}
 	return metadata
 }

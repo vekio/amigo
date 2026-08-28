@@ -129,7 +129,7 @@ func TestAPIRecordsTypedOperationsInRegistrationOrder(t *testing.T) {
 	if len(operation.input.pathParameters) != 1 || len(operation.input.body.fields) != 1 {
 		t.Errorf("input metadata = %#v", operation.input)
 	}
-	if len(operation.output.headers) != 1 {
+	if len(operation.output.headers) != 1 || len(operation.output.body.fields) != 1 {
 		t.Errorf("output metadata = %#v", operation.output)
 	}
 	if len(operation.errors) != 1 || !errors.Is(operation.errors[0].target, conflict) {

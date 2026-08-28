@@ -12,11 +12,11 @@ import (
 // WithTags, WithMiddleware, and WithErrorMapping.
 type RouteOption func(*route)
 
-// WithStatus sets the endpoint's successful HTTP status. Only 2xx statuses are
-// accepted; the default is 200 OK.
+// WithStatus sets the endpoint's non-error HTTP status. Statuses from 200
+// through 399 are accepted; the default is 200 OK.
 func WithStatus(status int) RouteOption {
-	if status < http.StatusOK || status > 299 {
-		panic(fmt.Sprintf("amigo: success status must be between 200 and 299, got %d", status))
+	if status < http.StatusOK || status > 399 {
+		panic(fmt.Sprintf("amigo: response status must be between 200 and 399, got %d", status))
 	}
 
 	return func(route *route) {

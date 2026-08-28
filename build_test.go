@@ -63,6 +63,31 @@ func TestBuildInputMetadataRecognizesMissingBody(t *testing.T) {
 	}
 }
 
+func TestBuildOutputMetadataRegistersCompleteBody(t *testing.T) {
+	type output struct {
+		Location  string    `header:"Location" json:"-"`
+		ID        uuid.UUID `json:"id"`
+		CreatedAt time.Time `json:"created_at,omitempty"`
+		Enabled   bool
+		Ignored   string `json:"-"`
+	}
+
+	metadata := buildOutputMetadata[output]()
+
+	if len(metadata.headers) != 1 {
+		t.Errorf("headers = %d, want 1", len(metadata.headers))
+	}
+	wantNames := []string{"id", "created_at", "Enabled"}
+	if len(metadata.body.fields) != len(wantNames) {
+		t.Fatalf("body fields = %#v", metadata.body.fields)
+	}
+	for index, wantName := range wantNames {
+		if metadata.body.fields[index].name != wantName {
+			t.Errorf("body field %d = %q, want %q", index, metadata.body.fields[index].name, wantName)
+		}
+	}
+}
+
 func TestBodyMetadataRejectsDuplicateJSONName(t *testing.T) {
 	field := reflect.TypeFor[struct {
 		Value string `json:"value"`
@@ -84,7 +109,37 @@ func TestBodyFieldNameRejectsJSONTagOnUnexportedField(t *testing.T) {
 	}
 
 	assertPanics(t, func() {
-		_, _ = bodyFieldName(field)
+		_, _ = jsonBodyFieldName(field)
+	})
+}
+
+func TestPathFieldRequiresExactIgnoredJSONTag(t *testing.T) {
+	field := reflect.StructField{
+		Name: "ID",
+		Type: reflect.TypeFor[string](),
+		Tag:  `path:"id" json:"-,omitempty"`,
+	}
+
+	assertPanics(t, func() {
+		checkPathField(
+			field,
+			"id",
+			"/things/{id}",
+			map[string]struct{}{"id": {}},
+			make(map[string]struct{}),
+		)
+	})
+}
+
+func TestBodyFieldNameRejectsExplicitEmbedding(t *testing.T) {
+	field := reflect.StructField{
+		Name: "Details",
+		Type: reflect.TypeFor[EmbeddedInputFields](),
+		Tag:  `json:",embed"`,
+	}
+
+	assertPanics(t, func() {
+		_, _ = jsonBodyFieldName(field)
 	})
 }
 
@@ -225,26 +280,10 @@ func TestBuildInputMetadataRejectsInvalidInput(t *testing.T) {
 			},
 		},
 		{
-			name: "parameter with non-exact ignored JSON tag",
-			build: func() {
-				buildInputMetadata[struct {
-					ID string `path:"id" json:"-,omitempty"`
-				}]("/things/{id}", newValidatorRegistry())
-			},
-		},
-		{
 			name: "implicitly embedded JSON field",
 			build: func() {
 				buildInputMetadata[struct {
 					EmbeddedInputFields
-				}]("/things", newValidatorRegistry())
-			},
-		},
-		{
-			name: "explicitly embedded JSON field",
-			build: func() {
-				buildInputMetadata[struct {
-					Details EmbeddedInputFields `json:",embed"`
 				}]("/things", newValidatorRegistry())
 			},
 		},

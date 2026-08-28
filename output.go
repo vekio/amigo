@@ -7,13 +7,26 @@ import (
 	"reflect"
 )
 
+func statusAllowsBody(status int) bool {
+	return status >= http.StatusOK &&
+		status != http.StatusNoContent &&
+		status != http.StatusResetContent &&
+		status != http.StatusNotModified
+}
+
+func checkOutputStatus(status int, metadata outputMetadata) {
+	if !statusAllowsBody(status) && !metadata.body.isEmpty() {
+		panic(fmt.Sprintf("amigo: response status %d does not allow a JSON body", status))
+	}
+}
+
 func writeOutput[Out any](
 	w http.ResponseWriter,
 	status int,
 	output Out,
 	metadata outputMetadata,
 ) error {
-	if status == http.StatusNoContent || status == http.StatusResetContent {
+	if !statusAllowsBody(status) || metadata.body.isEmpty() {
 		writeOutputHeaders(w, reflect.ValueOf(output), metadata.headers)
 		w.WriteHeader(status)
 		return nil

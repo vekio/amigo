@@ -22,14 +22,14 @@ func locateInputField(field reflect.StructField) inputLocation {
 		}
 	}
 
-	name, exists := bodyFieldName(field)
+	name, exists := jsonBodyFieldName(field)
 	if !exists {
 		return inputLocation{}
 	}
 	return inputLocation{source: "body", name: name}
 }
 
-func bodyFieldName(field reflect.StructField) (string, bool) {
+func jsonBodyFieldName(field reflect.StructField) (string, bool) {
 	tag, tagged := field.Tag.Lookup("json")
 	if !field.IsExported() {
 		if tagged && tag != "-" {

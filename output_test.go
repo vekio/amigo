@@ -62,6 +62,71 @@ func TestWriteOutputWritesNoContent(t *testing.T) {
 	}
 }
 
+func TestWriteOutputSkipsJSONForHeaderOnlyOutput(t *testing.T) {
+	type outputHeaders struct {
+		Location string `header:"Location" json:"-"`
+	}
+
+	for _, status := range []int{http.StatusOK, http.StatusCreated, http.StatusTemporaryRedirect} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			response := httptest.NewRecorder()
+			err := writeOutput(
+				response,
+				status,
+				outputHeaders{Location: "/things/abc"},
+				buildOutputMetadata[outputHeaders](),
+			)
+
+			if err != nil {
+				t.Fatalf("writeOutput() error = %v", err)
+			}
+			if response.Code != status || response.Body.Len() != 0 {
+				t.Errorf("status = %d, body = %q", response.Code, response.Body.String())
+			}
+			if response.Header().Get("Location") != "/things/abc" {
+				t.Errorf("Location = %q", response.Header().Get("Location"))
+			}
+			if response.Header().Get("Content-Type") != "" {
+				t.Errorf("Content-Type = %q, want empty", response.Header().Get("Content-Type"))
+			}
+		})
+	}
+}
+
+func TestWriteOutputAllowsJSONForRedirect(t *testing.T) {
+	type outputBody struct {
+		Choices []string `json:"choices"`
+	}
+	response := httptest.NewRecorder()
+
+	err := writeOutput(
+		response,
+		http.StatusMultipleChoices,
+		outputBody{Choices: []string{"/first", "/second"}},
+		buildOutputMetadata[outputBody](),
+	)
+
+	if err != nil {
+		t.Fatalf("writeOutput() error = %v", err)
+	}
+	if response.Code != http.StatusMultipleChoices || response.Body.String() != `{"choices":["/first","/second"]}` {
+		t.Errorf("status = %d, body = %s", response.Code, response.Body.String())
+	}
+}
+
+func TestCheckOutputStatusRejectsJSONBodyForBodylessStatus(t *testing.T) {
+	type outputBody struct {
+		Code string `json:"code"`
+	}
+	metadata := buildOutputMetadata[outputBody]()
+
+	for _, status := range []int{http.StatusNoContent, http.StatusResetContent, http.StatusNotModified} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			assertPanics(t, func() { checkOutputStatus(status, metadata) })
+		})
+	}
+}
+
 func TestWriteOutputReturnsEncodingErrorBeforeWriting(t *testing.T) {
 	type outputBody struct {
 		Unsupported func() `json:"unsupported"`

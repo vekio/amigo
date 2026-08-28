@@ -82,6 +82,7 @@ func (router *Router) registerEndpoint[In, Out any](
 	endpointRoute := router.buildRoute(method, path, options...)
 	input := buildInputMetadata[In](endpointRoute.path, router.api.validators)
 	output := buildOutputMetadata[Out]()
+	checkOutputStatus(endpointRoute.status, output)
 	endpointRoute.inputType = reflect.TypeFor[In]()
 	endpointRoute.outputType = reflect.TypeFor[Out]()
 	endpointRoute.input = input
