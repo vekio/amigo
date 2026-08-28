@@ -1,153 +1,87 @@
+// Package amigo provides a small, typed layer over net/http.
+//
+// Endpoints use struct inputs and outputs so request binding and response
+// encoding stay outside application handlers. Raw endpoints remain available
+// when direct access to net/http is required.
 package amigo
 
 import (
+	"log/slog"
 	"net/http"
-	"sync"
 )
 
-// API is a small typed wrapper around http.ServeMux. Create one with New and
-// configure it from one goroutine before building it. Once built, an API can
-// serve requests concurrently but can no longer be configured.
+// API owns the HTTP route tree and its underlying [http.ServeMux].
+// Routes should be registered during application startup.
 type API struct {
-	root         *Router
-	operations   []Operation
-	mux          *http.ServeMux
-	errorHandler ErrorHandler
-	validators   validatorRegistry
-	maxBodyBytes int64
-	buildOnce    sync.Once
-	built        bool
-	buildErr     error
+	mux        *http.ServeMux
+	root       *Router
+	logger     *slog.Logger
+	validators validatorRegistry
 }
 
-// New creates an empty API.
-func New() *API {
-	return &API{
-		root:         NewRouter(),
-		errorHandler: DefaultErrorHandler,
-		validators:   make(validatorRegistry),
+// New creates an HTTP application with a root router.
+func New(options ...APIOption) *API {
+	api := &API{
+		mux:        http.NewServeMux(),
+		logger:     slog.Default(),
+		validators: newValidatorRegistry(),
 	}
-}
-
-// SetErrorHandler replaces the handler used for request errors.
-// It must be called before Compile, Handler, Run, or the first request.
-// Passing nil restores DefaultErrorHandler.
-func (api *API) SetErrorHandler(handler ErrorHandler) {
-	if api.built {
-		panic("amigo: cannot set the error handler after the API has been built")
+	for _, option := range options {
+		if option == nil {
+			panic("amigo: API option cannot be nil")
+		}
+		option(api)
 	}
-	if handler == nil {
-		handler = DefaultErrorHandler
+	api.root = newRouter(api, nil, "", nil)
+	return api
+}
+
+// Group creates a child router for prefix. Its middleware is inherited by all
+// routes and nested groups registered below it.
+func (app *API) Group(prefix string, middlewares ...Middleware) *Router {
+	return app.root.Group(prefix, middlewares...)
+}
+
+// ServeHTTP implements http.Handler.
+func (app *API) ServeHTTP(w http.ResponseWriter, request *http.Request) {
+	handler, pattern := app.mux.Handler(request)
+	if pattern == "" {
+		fallback := inspectMuxFallback(handler, request)
+		if fallback.status == http.StatusNotFound || fallback.status == http.StatusMethodNotAllowed {
+			writeRoutingProblem(w, request, fallback)
+			return
+		}
 	}
-	api.errorHandler = handler
+	app.mux.ServeHTTP(w, request)
 }
 
-// Compile builds the routes once and returns the final HTTP handler.
-func (api *API) Compile() (http.Handler, error) {
-	api.buildOnce.Do(func() {
-		api.built = true
-		api.mux, api.operations, api.buildErr = api.compile()
-	})
-	if api.buildErr != nil {
-		return nil, api.buildErr
-	}
-	return http.HandlerFunc(api.mux.ServeHTTP), nil
+// GET registers a typed GET endpoint on the root router.
+func (app *API) GET[In, Out any](path string, endpoint EndpointFunc[In, Out], options ...RouteOption) {
+	app.root.GET(path, endpoint, options...)
 }
 
-// Handler builds the routes once and returns the final HTTP handler. It panics
-// if the API configuration is invalid. Use Compile to handle that error.
-func (api *API) Handler() http.Handler {
-	handler, err := api.Compile()
-	if err != nil {
-		panic(err)
-	}
-	return handler
+// POST registers a typed POST endpoint on the root router.
+func (app *API) POST[In, Out any](path string, endpoint EndpointFunc[In, Out], options ...RouteOption) {
+	app.root.POST(path, endpoint, options...)
 }
 
-// Run builds the routes and starts an HTTP server.
-func (api *API) Run(address string) error {
-	handler, err := api.Compile()
-	if err != nil {
-		return err
-	}
-	return http.ListenAndServe(address, handler)
+// PUT registers a typed PUT endpoint on the root router.
+func (app *API) PUT[In, Out any](path string, endpoint EndpointFunc[In, Out], options ...RouteOption) {
+	app.root.PUT(path, endpoint, options...)
 }
 
-// ServeHTTP makes API an http.Handler.
-func (api *API) ServeHTTP(w http.ResponseWriter, req *http.Request) {
-	if _, err := api.Compile(); err != nil {
-		panic(err)
-	}
-	api.mux.ServeHTTP(w, req)
+// PATCH registers a typed PATCH endpoint on the root router.
+func (app *API) PATCH[In, Out any](path string, endpoint EndpointFunc[In, Out], options ...RouteOption) {
+	app.root.PATCH(path, endpoint, options...)
 }
 
-// GET adds a typed GET handler to the root router.
-func (api *API) GET[In, Out any](path string, handler Handler[In, Out], options ...RouteOption) {
-	api.assertMutable("register a route")
-	register(api.root, http.MethodGet, path, handler, options...)
+// DELETE registers a typed DELETE endpoint on the root router.
+func (app *API) DELETE[In, Out any](path string, endpoint EndpointFunc[In, Out], options ...RouteOption) {
+	app.root.DELETE(path, endpoint, options...)
 }
 
-// POST adds a typed POST handler to the root router.
-func (api *API) POST[In, Out any](path string, handler Handler[In, Out], options ...RouteOption) {
-	api.assertMutable("register a route")
-	register(api.root, http.MethodPost, path, handler, options...)
-}
-
-// PUT adds a typed PUT handler to the root router.
-func (api *API) PUT[In, Out any](path string, handler Handler[In, Out], options ...RouteOption) {
-	api.assertMutable("register a route")
-	register(api.root, http.MethodPut, path, handler, options...)
-}
-
-// PATCH adds a typed PATCH handler to the root router.
-func (api *API) PATCH[In, Out any](path string, handler Handler[In, Out], options ...RouteOption) {
-	api.assertMutable("register a route")
-	register(api.root, http.MethodPatch, path, handler, options...)
-}
-
-// DELETE adds a typed DELETE handler to the root router.
-func (api *API) DELETE[In, Out any](path string, handler Handler[In, Out], options ...RouteOption) {
-	api.assertMutable("register a route")
-	register(api.root, http.MethodDelete, path, handler, options...)
-}
-
-// Include adds a snapshot of a Router to the API.
-func (api *API) Include(router *Router) {
-	api.assertMutable("include a router")
-	api.root.Include(router)
-}
-
-// Use adds middleware to every route in the API.
-func (api *API) Use(middleware ...Middleware) {
-	api.assertMutable("register middleware")
-	api.root.Use(middleware...)
-}
-
-// Operations builds the API and returns a snapshot of its operations.
-func (api *API) Operations() []Operation {
-	if _, err := api.Compile(); err != nil {
-		panic(err)
-	}
-
-	operations := make([]Operation, len(api.operations))
-	for index := range api.operations {
-		operations[index] = api.operations[index].clone()
-	}
-	return operations
-}
-
-// SetMaxBodyBytes sets the maximum size of a JSON request body. Zero disables
-// the limit. It must be called before the API is built.
-func (api *API) SetMaxBodyBytes(limit int64) {
-	api.assertMutable("set the maximum request body size")
-	if limit < 0 {
-		panic("amigo: maximum request body size cannot be negative")
-	}
-	api.maxBodyBytes = limit
-}
-
-func (api *API) assertMutable(action string) {
-	if api.built {
-		panic("amigo: cannot " + action + " after the API has been built")
-	}
+// RAW registers an endpoint on the root router without typed request binding
+// or response encoding. The endpoint owns the complete HTTP response.
+func (app *API) RAW(method string, path string, endpoint RawEndpointFunc, options ...RouteOption) {
+	app.root.RAW(method, path, endpoint, options...)
 }

@@ -1,102 +1,79 @@
 package amigo
 
 import (
+	"errors"
 	"fmt"
 	"reflect"
 	"strings"
+	"unicode"
 )
+
+const requiredValidator = "required"
+
+var errRequired = errors.New("is required")
 
 type validatorRegistry map[string]fieldValidator
 
 type fieldValidator struct {
+	name     string
 	typeOf   reflect.Type
-	validate func(reflect.Value) error
+	validate func(reflect.Value, bool) error
+}
+
+func newValidatorRegistry() validatorRegistry {
+	return validatorRegistry{
+		requiredValidator: {
+			name: requiredValidator,
+			validate: func(value reflect.Value, present bool) error {
+				if hasRequiredValue(value, present) {
+					return nil
+				}
+				return errRequired
+			},
+		},
+	}
 }
 
 // Validator registers a named typed validator for validate struct tags. It
-// must be called before the API is built. The function must be safe for
-// concurrent use.
-func (api *API) Validator[T any](name string, validate func(T) error) {
-	if api.built {
-		panic("amigo: cannot register a validator after the API has been built")
-	}
-	name = strings.TrimSpace(name)
-	if name == "" || name == "-" || strings.Contains(name, ",") {
-		panic(fmt.Sprintf("amigo: invalid validator name %q", name))
-	}
-	if validate == nil {
-		panic(fmt.Sprintf("amigo: validator %q is nil", name))
-	}
-	if _, exists := api.validators[name]; exists {
-		panic(fmt.Sprintf("amigo: validator %q is already registered", name))
-	}
-	if api.validators == nil {
-		api.validators = make(validatorRegistry)
-	}
+// must be called before routes that use it are registered. The validator
+// function may be called concurrently and must therefore be concurrency-safe.
+func (app *API) Validator[T any](name string, validate func(T) error) {
+	checkValidatorRegistration(name, validate != nil, app.validators)
 
-	api.validators[name] = fieldValidator{
+	app.validators[name] = fieldValidator{
+		name:   name,
 		typeOf: reflect.TypeFor[T](),
-		validate: func(value reflect.Value) error {
+		validate: func(value reflect.Value, _ bool) error {
 			return validate(value.Interface().(T))
 		},
 	}
 }
 
-func validateRules(metadata *InputMetadata, validators validatorRegistry) error {
-	for _, validation := range metadata.Validations {
-		for _, rule := range validation.Rules {
-			validator, exists := validators[rule]
-			if !exists {
-				return fmt.Errorf("validator %q used by %s is not registered", rule, validation.Location)
-			}
-			if !validation.Type.AssignableTo(validator.typeOf) {
-				return fmt.Errorf(
-					"validator %q expects %s but %s has type %s",
-					rule,
-					validator.typeOf,
-					validation.Location,
-					validation.Type,
-				)
-			}
-		}
+func checkValidatorRegistration(name string, nonNil bool, validators validatorRegistry) {
+	if name == "" || name == "-" || strings.Contains(name, ",") || strings.ContainsFunc(name, unicode.IsSpace) {
+		panic(fmt.Sprintf("amigo: invalid validator name %q", name))
 	}
-	return nil
+	if !nonNil {
+		panic(fmt.Sprintf("amigo: validator %q cannot be nil", name))
+	}
+	if _, exists := validators[name]; exists {
+		panic(fmt.Sprintf("amigo: validator %q is already registered", name))
+	}
 }
 
-func validateInput(input any, metadata *InputMetadata, validators validatorRegistry) error {
-	inputValue := reflect.ValueOf(input)
-	validationError := &ValidationError{}
-
-	for _, validation := range metadata.Validations {
-		fieldValue, present := fieldByIndex(inputValue, validation.index)
-		if !present {
-			continue
-		}
-		for _, rule := range validation.Rules {
-			if err := validators[rule].validate(fieldValue); err != nil {
-				validationError.Errors = append(validationError.Errors, FieldError{
-					Location: validation.Location,
-					Message:  err.Error(),
-				})
-			}
-		}
+func hasRequiredValue(value reflect.Value, present bool) bool {
+	if !present || !value.IsValid() {
+		return false
 	}
 
-	if len(validationError.Errors) > 0 {
-		return validationError
+	switch value.Kind() {
+	case reflect.String:
+		return strings.TrimSpace(value.String()) != ""
+	case reflect.Array, reflect.Slice, reflect.Map:
+		return value.Len() > 0
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Pointer:
+		return !value.IsNil()
+	default:
+		return true
 	}
-	return nil
-}
-
-func fieldByIndex(value reflect.Value, index []int) (reflect.Value, bool) {
-	for _, fieldIndex := range index {
-		for value.Kind() == reflect.Pointer {
-			if value.IsNil() {
-				return reflect.Value{}, false
-			}
-			value = value.Elem()
-		}
-		value = value.Field(fieldIndex)
-	}
-	return value, true
 }

@@ -2,58 +2,64 @@ package amigo
 
 import (
 	"context"
-	"encoding/json/v2"
-	"errors"
+	"log/slog"
 	"net/http"
 )
 
-// Handler processes a typed input and returns a typed output.
-type Handler[In, Out any] func(context.Context, In) (Out, error)
+// EndpointFunc is a typed HTTP endpoint. In and Out must be structs. Input
+// fields tagged with path, query, or header are bound from their corresponding
+// request values; the remaining input is decoded from JSON. Output fields
+// tagged with header become response headers; the remaining output is encoded
+// as JSON. Transport fields must also use json:"-" so metadata cannot leak into
+// JSON representations. Input fields may use validate:"required,name" to apply
+// the built-in presence check and validators registered on the API. Query
+// slices collect repeated keys; scalar query fields reject repeated keys.
+// Parameter types implementing encoding.TextUnmarshaler are also supported.
+type EndpointFunc[In, Out any] func(context.Context, In) (Out, error)
 
-func handlerHTTP[In, Out any](
-	handler Handler[In, Out],
-	inputMetadata InputMetadata,
-	outputMetadata OutputMetadata,
-	config handlerConfig,
-) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		if inputMetadata.Body != nil && config.maxBodyBytes > 0 && req.Body != nil {
-			req.Body = http.MaxBytesReader(w, req.Body, config.maxBodyBytes)
-		}
+// RawEndpointFunc is the escape hatch for endpoints that need direct access to
+// net/http, such as streaming responses or file downloads. An error should be
+// returned before writing a response, because a committed response cannot be
+// replaced with an error representation.
+type RawEndpointFunc func(http.ResponseWriter, *http.Request) error
 
-		input, err := bindInput[In](req, &inputMetadata)
+func endpointHandler[In, Out any](
+	logger *slog.Logger,
+	route route,
+	inputMetadata inputMetadata,
+	outputMetadata outputMetadata,
+	endpoint EndpointFunc[In, Out],
+) http.HandlerFunc {
+	return func(w http.ResponseWriter, request *http.Request) {
+		limitRequestBody(w, request, route.maxBodyBytes)
+
+		bound, err := bindInputWithPresence[In](request, inputMetadata)
 		if err != nil {
-			config.errorHandler(w, req, ErrorPhaseBinding, err)
+			writeError(logger, w, request, route, err)
+			return
+		}
+		if err := validateInput(bound.value, inputMetadata, bound.present); err != nil {
+			writeError(logger, w, request, route, err)
 			return
 		}
 
-		if err := validateInput(input, &inputMetadata, config.validators); err != nil {
-			config.errorHandler(w, req, ErrorPhaseValidation, err)
-			return
-		}
-
-		output, err := handler(req.Context(), input)
+		output, err := endpoint(request.Context(), bound.value)
 		if err != nil {
-			phase := ErrorPhaseHandler
-			if _, ok := errors.AsType[*ValidationError](err); ok {
-				phase = ErrorPhaseValidation
-			}
-			config.errorHandler(w, req, phase, err)
-			return
-		}
-		if outputMetadata.Status == http.StatusNoContent || outputMetadata.Status == http.StatusResetContent {
-			w.WriteHeader(outputMetadata.Status)
+			writeError(logger, w, request, route, err)
 			return
 		}
 
-		data, err := json.Marshal(output)
-		if err != nil {
-			config.errorHandler(w, req, ErrorPhaseResponseEncoding, err)
-			return
+		if err := writeOutput(w, route.status, output, outputMetadata); err != nil {
+			writeError(logger, w, request, route, err)
 		}
+	}
+}
 
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(outputMetadata.Status)
-		_, _ = w.Write(data)
-	})
+func rawEndpointHandler(logger *slog.Logger, route route, endpoint RawEndpointFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, request *http.Request) {
+		limitRequestBody(w, request, route.maxBodyBytes)
+		if err := endpoint(w, request); err != nil {
+			writeError(logger, w, request, route, err)
+		}
+	}
 }

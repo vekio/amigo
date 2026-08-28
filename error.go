@@ -1,112 +1,63 @@
 package amigo
 
 import (
+	"encoding/json/v2"
 	"errors"
 	"log/slog"
 	"net/http"
 )
 
-// ErrorPhase identifies the stage where a request failed.
-type ErrorPhase uint8
-
-const (
-	ErrorPhaseUnknown ErrorPhase = iota
-	ErrorPhaseBinding
-	ErrorPhaseValidation
-	ErrorPhaseHandler
-	ErrorPhaseResponseEncoding
-)
-
-func (phase ErrorPhase) String() string {
-	switch phase {
-	case ErrorPhaseBinding:
-		return "binding"
-	case ErrorPhaseValidation:
-		return "validation"
-	case ErrorPhaseHandler:
-		return "handler"
-	case ErrorPhaseResponseEncoding:
-		return "response_encoding"
-	default:
-		return "unknown"
-	}
+type errorMapping struct {
+	target       error
+	status       int
+	publicDetail string
 }
 
-// ErrorHandler handles an error produced while serving an HTTP request.
-type ErrorHandler func(http.ResponseWriter, *http.Request, ErrorPhase, error)
-
-// DefaultErrorHandler logs private errors and writes an RFC 9457 response.
-func DefaultErrorHandler(
-	w http.ResponseWriter,
-	req *http.Request,
-	phase ErrorPhase,
-	err error,
-) {
-	if err == nil {
-		err = errors.New("nil request error")
-		phase = ErrorPhaseUnknown
+// resolveProblem converts an endpoint error into a safe client representation.
+// Explicit problems win, followed by route mappings; everything else is a 500.
+func (r route) resolveProblem(err error) *problem {
+	if direct, ok := errors.AsType[*problem](err); ok {
+		clone := *direct
+		return &clone
+	}
+	if invalid, ok := errors.AsType[*validationError](err); ok {
+		problem := newProblem(http.StatusUnprocessableEntity, invalid.Error())
+		problem.Errors = invalid.errors
+		return problem
 	}
 
-	var problem *Problem
-
-	if validation, ok := errors.AsType[*ValidationError](err); ok {
-		problem = problemFromValidation(validation)
-	} else if publicProblem, ok := errors.AsType[*Problem](err); ok {
-		problem = publicProblem
-		if cause := errors.Unwrap(publicProblem); cause != nil {
-			logRequestError(req, phase, cause)
-		} else if publicProblem.Status >= http.StatusInternalServerError {
-			logRequestError(req, phase, err)
+	for _, mapping := range r.errorMappings {
+		if errors.Is(err, mapping.target) {
+			return newProblem(mapping.status, mapping.publicDetail)
 		}
-	} else if statusError, ok := errors.AsType[StatusError](err); ok {
-		status := statusError.StatusCode()
-		if status < 400 || status > 599 {
-			logRequestError(req, phase, err)
-			problem = InternalServerError("internal server error")
-		} else {
-			problem = NewProblem(status, statusError.Error())
-		}
-		if status >= http.StatusInternalServerError && status <= 599 {
-			logRequestError(req, phase, err)
-		}
-	} else if phase == ErrorPhaseBinding {
-		status := http.StatusBadRequest
-		detail := err.Error()
-		if _, ok := errors.AsType[*http.MaxBytesError](err); ok {
-			status = http.StatusRequestEntityTooLarge
-			detail = "request body exceeds the maximum allowed size"
-		} else if errors.Is(err, errUnsupportedMediaType) {
-			status = http.StatusUnsupportedMediaType
-		}
-		problem = NewProblem(status, detail)
-	} else {
-		logRequestError(req, phase, err)
-		problem = InternalServerError("internal server error")
 	}
 
-	problem = problemWithInstance(problem, req.URL.Path)
+	return newProblem(http.StatusInternalServerError, "internal server error")
+}
+
+func writeError(logger *slog.Logger, w http.ResponseWriter, request *http.Request, route route, err error) {
+	problem := route.resolveProblem(err)
+	problem.Instance = request.URL.Path
+
+	if problem.Status >= http.StatusInternalServerError {
+		logger.ErrorContext(request.Context(), "request failed",
+			"method", request.Method,
+			"path", request.URL.Path,
+			"error", err,
+		)
+	}
+
 	writeProblem(w, problem)
 }
 
-func problemWithInstance(problem *Problem, instance string) *Problem {
-	if problem == nil {
-		problem = InternalServerError("internal server error")
+func writeProblem(w http.ResponseWriter, problem *problem) {
+	data, err := json.Marshal(problem)
+	if err != nil {
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
 	}
 
-	copy := *problem
-	if copy.Instance == "" {
-		copy.Instance = instance
-	}
-	return &copy
-}
-
-func logRequestError(req *http.Request, phase ErrorPhase, err error) {
-	slog.ErrorContext(
-		req.Context(),
-		"request failed",
-		"phase", phase.String(),
-		"method", req.Method,
-		"path", req.URL.Path,
-		"error", err,
-	)
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(problem.Status)
+	_, _ = w.Write(data)
 }

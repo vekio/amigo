@@ -1,129 +1,67 @@
 package amigo
 
 import (
-	"context"
+	"encoding/json/v2"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
-	"strings"
+	"net/http/httptest"
 	"testing"
 )
 
-func TestHandlerReportsErrorPhases(t *testing.T) {
-	tests := []struct {
-		name    string
-		phase   ErrorPhase
-		setup   func(*API)
-		method  string
-		target  string
-		body    string
-		headers map[string]string
-	}{
-		{
-			name:  "binding",
-			phase: ErrorPhaseBinding,
-			setup: func(api *API) {
-				api.GET("/items/{id}", func(_ context.Context, _ struct {
-					ID int `path:"id"`
-				}) (struct{}, error) {
-					return struct{}{}, nil
-				})
-			},
-			method: http.MethodGet,
-			target: "/items/not-an-int",
-		},
-		{
-			name:  "automatic validation",
-			phase: ErrorPhaseValidation,
-			setup: func(api *API) {
-				api.Validator("positive", func(value int) error {
-					if value < 1 {
-						return errors.New("must be positive")
-					}
-					return nil
-				})
-				api.GET("/items", func(_ context.Context, _ struct {
-					Page int `query:"page" validate:"positive"`
-				}) (struct{}, error) {
-					return struct{}{}, nil
-				})
-			},
-			method: http.MethodGet,
-			target: "/items?page=0",
-		},
-		{
-			name:  "handler validation",
-			phase: ErrorPhaseValidation,
-			setup: func(api *API) {
-				api.GET("/items", func(_ context.Context, _ emptyInput) (struct{}, error) {
-					return struct{}{}, &ValidationError{}
-				})
-			},
-			method: http.MethodGet,
-			target: "/items",
-		},
-		{
-			name:  "handler",
-			phase: ErrorPhaseHandler,
-			setup: func(api *API) {
-				api.GET("/items", func(_ context.Context, _ emptyInput) (struct{}, error) {
-					return struct{}{}, errors.New("handler failed")
-				})
-			},
-			method: http.MethodGet,
-			target: "/items",
-		},
-		{
-			name:  "response encoding",
-			phase: ErrorPhaseResponseEncoding,
-			setup: func(api *API) {
-				api.GET("/items", func(_ context.Context, _ emptyInput) (struct {
-					Unsupported func() `json:"unsupported"`
-				}, error) {
-					return struct {
-						Unsupported func() `json:"unsupported"`
-					}{Unsupported: func() {}}, nil
-				})
-			},
-			method: http.MethodGet,
-			target: "/items",
-		},
-	}
+func TestWriteErrorReturnsSafeInternalServerError(t *testing.T) {
+	request := httptest.NewRequest(http.MethodGet, "/things", nil)
+	response := httptest.NewRecorder()
 
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			api := New()
-			var gotPhase ErrorPhase
-			var gotError error
-			api.SetErrorHandler(func(_ http.ResponseWriter, _ *http.Request, phase ErrorPhase, err error) {
-				gotPhase = phase
-				gotError = err
-			})
-			test.setup(api)
-			var body io.Reader
-			if test.body != "" {
-				body = strings.NewReader(test.body)
-			}
-			request(t, api, test.method, test.target, body, test.headers)
-			if gotPhase != test.phase || gotError == nil {
-				t.Fatalf("phase=%s error=%v", gotPhase, gotError)
-			}
-		})
+	writeError(discardLogger(), response, request, route{}, errors.New("private failure"))
+
+	if response.Code != http.StatusInternalServerError {
+		t.Errorf("status = %d, want %d", response.Code, http.StatusInternalServerError)
+	}
+	if response.Header().Get("Content-Type") != "application/problem+json" {
+		t.Errorf("Content-Type = %q", response.Header().Get("Content-Type"))
+	}
+	var output problem
+	if err := json.Unmarshal(response.Body.Bytes(), &output); err != nil {
+		t.Fatalf("decode problem: %v", err)
+	}
+	if output.Detail != "internal server error" || output.Instance != "/things" {
+		t.Errorf("problem = %#v", output)
 	}
 }
 
-func TestErrorPhaseString(t *testing.T) {
-	tests := map[ErrorPhase]string{
-		ErrorPhaseUnknown:          "unknown",
-		ErrorPhaseBinding:          "binding",
-		ErrorPhaseValidation:       "validation",
-		ErrorPhaseHandler:          "handler",
-		ErrorPhaseResponseEncoding: "response_encoding",
-		ErrorPhase(255):            "unknown",
+func TestWriteErrorUsesRouteMapping(t *testing.T) {
+	target := errors.New("repository sentinel")
+	publicDetail := "thing not found"
+	request := httptest.NewRequest(http.MethodGet, "/things/42", nil)
+	response := httptest.NewRecorder()
+	route := newRoute(http.MethodGet, "/things/{id}", WithErrorMapping(target, http.StatusNotFound, publicDetail))
+
+	writeError(discardLogger(), response, request, route, errors.Join(errors.New("private database failure"), target))
+
+	if response.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want %d", response.Code, http.StatusNotFound)
 	}
-	for phase, want := range tests {
-		if got := phase.String(); got != want {
-			t.Fatalf("phase %d string=%q, want %q", phase, got, want)
-		}
+	var output problem
+	if err := json.Unmarshal(response.Body.Bytes(), &output); err != nil {
+		t.Fatalf("decode problem: %v", err)
 	}
+	if output.Detail != publicDetail || output.Instance != "/things/42" {
+		t.Errorf("problem = %#v", output)
+	}
+}
+
+func TestErrorMappingAllowsOmittingPublicDetail(t *testing.T) {
+	target := errors.New("private failure")
+	route := newRoute(http.MethodGet, "/things", WithErrorMapping(target, http.StatusNotFound, ""))
+
+	problem := route.resolveProblem(target)
+	if problem.Status != http.StatusNotFound || problem.Detail != "" {
+		t.Errorf("problem = %#v", problem)
+	}
+}
+
+func discardLogger() *slog.Logger {
+	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }

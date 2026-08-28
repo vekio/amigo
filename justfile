@@ -3,11 +3,6 @@
 default:
     @just --list
 
-# Run the basic HTTP server example
-[group('run')]
-examples:
-    go run ./examples/basic
-
 # Build the library and executable examples
 [group('quality')]
 build:

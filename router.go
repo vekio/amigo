@@ -4,105 +4,135 @@ import (
 	"fmt"
 	"net/http"
 	"slices"
+	"strings"
 )
 
-// Router groups routes, middleware, and snapshots of included routers. Configure
-// it from one goroutine. Including it in another Router or API copies its current
-// state, so it can be changed and reused afterwards without affecting that copy.
+// Router groups routes below a shared prefix and middleware chain. A router may
+// create nested groups; it always remains owned by the API that created it.
 type Router struct {
-	prefix string
-	tags   []string
-
-	routes          []route
-	staticMounts    []staticMount
-	middleware      []Middleware
-	includedRouters map[*Router]struct{}
+	api         *API
+	parent      *Router
+	prefix      string
+	middlewares []Middleware
 }
 
-// NewRouter creates a group of related routes.
-func NewRouter(options ...RouterOption) *Router {
-	router := &Router{}
-	for _, option := range options {
-		option.applyRouter(router)
-	}
-	return router
-}
-
-// GET adds a typed GET handler to the router.
-func (router *Router) GET[In, Out any](path string, handler Handler[In, Out], options ...RouteOption) {
-	register(router, http.MethodGet, path, handler, options...)
-}
-
-// POST adds a typed POST handler to the router.
-func (router *Router) POST[In, Out any](path string, handler Handler[In, Out], options ...RouteOption) {
-	register(router, http.MethodPost, path, handler, options...)
-}
-
-// PUT adds a typed PUT handler to the router.
-func (router *Router) PUT[In, Out any](path string, handler Handler[In, Out], options ...RouteOption) {
-	register(router, http.MethodPut, path, handler, options...)
-}
-
-// PATCH adds a typed PATCH handler to the router.
-func (router *Router) PATCH[In, Out any](path string, handler Handler[In, Out], options ...RouteOption) {
-	register(router, http.MethodPatch, path, handler, options...)
-}
-
-// DELETE adds a typed DELETE handler to the router.
-func (router *Router) DELETE[In, Out any](path string, handler Handler[In, Out], options ...RouteOption) {
-	register(router, http.MethodDelete, path, handler, options...)
-}
-
-// Include adds a snapshot of a child Router.
-func (router *Router) Include(child *Router) {
-	if child == nil {
-		panic("amigo: cannot include a nil router")
-	}
-	if child == router || child.contains(router) {
-		panic("amigo: router inclusion cycle detected")
-	}
-
-	for _, childRoute := range child.routes {
-		snapshot := childRoute
-		snapshot.path = joinPath(child.prefix, snapshot.path)
-		snapshot.tags = slices.Concat(child.tags, snapshot.tags)
-		snapshot.middleware = slices.Concat(child.middleware, snapshot.middleware)
-		router.routes = append(router.routes, snapshot)
-	}
-	for _, childMount := range child.staticMounts {
-		snapshot := childMount
-		snapshot.path = joinPath(child.prefix, snapshot.path)
-		snapshot.middleware = slices.Concat(child.middleware, snapshot.middleware)
-		router.staticMounts = append(router.staticMounts, snapshot)
-	}
-
-	if router.includedRouters == nil {
-		router.includedRouters = make(map[*Router]struct{})
-	}
-	router.includedRouters[child] = struct{}{}
-	for included := range child.includedRouters {
-		router.includedRouters[included] = struct{}{}
+func newRouter(api *API, parent *Router, prefix string, middlewares []Middleware) *Router {
+	return &Router{
+		api:         api,
+		parent:      parent,
+		prefix:      prefix,
+		middlewares: slices.Clone(middlewares),
 	}
 }
 
-// Use adds middleware to every route in the router, including router snapshots.
-func (router *Router) Use(middleware ...Middleware) {
-	for index, current := range middleware {
-		if current == nil {
-			panic(fmt.Sprintf("amigo: middleware at index %d is nil", index))
+// GET registers a typed GET endpoint below the router prefix. An empty path
+// addresses the prefix itself.
+func (router *Router) GET[In, Out any](path string, endpoint EndpointFunc[In, Out], options ...RouteOption) {
+	router.registerEndpoint(http.MethodGet, path, endpoint, options...)
+}
+
+// POST registers a typed POST endpoint below the router prefix. An empty path
+// addresses the prefix itself.
+func (router *Router) POST[In, Out any](path string, endpoint EndpointFunc[In, Out], options ...RouteOption) {
+	router.registerEndpoint(http.MethodPost, path, endpoint, options...)
+}
+
+// PUT registers a typed PUT endpoint below the router prefix. An empty path
+// addresses the prefix itself.
+func (router *Router) PUT[In, Out any](path string, endpoint EndpointFunc[In, Out], options ...RouteOption) {
+	router.registerEndpoint(http.MethodPut, path, endpoint, options...)
+}
+
+// PATCH registers a typed PATCH endpoint below the router prefix. An empty path
+// addresses the prefix itself.
+func (router *Router) PATCH[In, Out any](path string, endpoint EndpointFunc[In, Out], options ...RouteOption) {
+	router.registerEndpoint(http.MethodPatch, path, endpoint, options...)
+}
+
+// DELETE registers a typed DELETE endpoint below the router prefix. An empty
+// path addresses the prefix itself.
+func (router *Router) DELETE[In, Out any](path string, endpoint EndpointFunc[In, Out], options ...RouteOption) {
+	router.registerEndpoint(http.MethodDelete, path, endpoint, options...)
+}
+
+// RAW registers an endpoint below the router prefix without typed request
+// binding or response encoding.
+func (router *Router) RAW(method string, path string, endpoint RawEndpointFunc, options ...RouteOption) {
+	if endpoint == nil {
+		panic("amigo: raw endpoint cannot be nil")
+	}
+	route := router.buildRoute(method, path, options...)
+	handler := applyMiddlewares(rawEndpointHandler(router.api.logger, route, endpoint), route.middlewares)
+	router.api.mux.Handle(route.pattern(), handler)
+}
+
+func (router *Router) registerEndpoint[In, Out any](
+	method string,
+	path string,
+	endpoint EndpointFunc[In, Out],
+	options ...RouteOption,
+) {
+	if endpoint == nil {
+		panic("amigo: endpoint cannot be nil")
+	}
+
+	endpointRoute := router.buildRoute(method, path, options...)
+	input := buildInputMetadata[In](endpointRoute.path, router.api.validators)
+	output := buildOutputMetadata[Out]()
+	handler := endpointHandler(router.api.logger, endpointRoute, input, output, endpoint)
+
+	router.api.mux.Handle(
+		endpointRoute.pattern(),
+		applyMiddlewares(handler, endpointRoute.middlewares),
+	)
+}
+
+// Group creates a child router. Parent middleware is applied before middleware
+// declared by the child and by individual routes.
+func (router *Router) Group(prefix string, middlewares ...Middleware) *Router {
+	checkGroupPrefix(prefix)
+	validateMiddlewares(middlewares)
+
+	fullPrefix := joinPath(router.prefix, prefix)
+	return newRouter(router.api, router, fullPrefix, middlewares)
+}
+
+func (router *Router) buildRoute(method string, path string, options ...RouteOption) route {
+	fullPath := router.routePath(path)
+	route := newRoute(method, fullPath, options...)
+	route.middlewares = append(router.inheritedMiddlewares(), route.middlewares...)
+	return route
+}
+
+func (router *Router) inheritedMiddlewares() []Middleware {
+	lineage := []*Router{}
+	for current := router; current != nil; current = current.parent {
+		lineage = append(lineage, current)
+	}
+
+	middlewares := []Middleware{}
+	for _, current := range slices.Backward(lineage) {
+		middlewares = append(middlewares, current.middlewares...)
+	}
+	return middlewares
+}
+
+func (router *Router) routePath(path string) string {
+	if path == "" {
+		if router.prefix == "" {
+			return "/"
 		}
-		router.middleware = append(router.middleware, current)
+		return router.prefix
 	}
+	if !strings.HasPrefix(path, "/") {
+		panic(fmt.Sprintf("amigo: route path %q must start with a slash", path))
+	}
+	return joinPath(router.prefix, path)
 }
 
-func (router *Router) addRoute(route route) {
-	router.routes = append(router.routes, route)
-}
-
-func (router *Router) contains(target *Router) bool {
-	if router == target {
-		return true
+func joinPath(prefix string, path string) string {
+	if prefix == "" {
+		return path
 	}
-	_, exists := router.includedRouters[target]
-	return exists
+	return prefix + path
 }

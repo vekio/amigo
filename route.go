@@ -1,67 +1,36 @@
 package amigo
 
-import (
-	"fmt"
-	"net/http"
-	"reflect"
-	"strings"
-)
+import "net/http"
 
-// route describes an HTTP endpoint relative to its Router.
+const defaultMaxBodyBytes int64 = 1 << 20
+
 type route struct {
-	method string
-	path   string
-	tags   []string
-	input  InputMetadata
-	output OutputMetadata
-
-	buildHandler handlerBuilder
-	middleware   []Middleware
+	method        string
+	path          string
+	status        int
+	maxBodyBytes  int64
+	errorMappings []errorMapping
+	middlewares   []Middleware
 }
 
-type handlerConfig struct {
-	validators   validatorRegistry
-	errorHandler ErrorHandler
-	maxBodyBytes int64
-}
-
-type handlerBuilder func(InputMetadata, OutputMetadata, handlerConfig) http.Handler
-
-func register[In, Out any](router *Router, method, path string, handler Handler[In, Out], options ...RouteOption) {
-	if handler == nil {
-		panic(fmt.Sprintf("amigo: %s %s: handler is nil", method, path))
+func newRoute(method string, path string, options ...RouteOption) route {
+	r := route{
+		method:       method,
+		path:         path,
+		status:       http.StatusOK,
+		maxBodyBytes: defaultMaxBodyBytes,
 	}
 
-	input, err := inspectInput(reflect.TypeFor[In]())
-	if err != nil {
-		panic(fmt.Sprintf("amigo: %s %s: %v", method, path, err))
-	}
-
-	registered := route{
-		method: method,
-		path:   path,
-		input:  input,
-		output: inspectOutput(reflect.TypeFor[Out]()),
-		buildHandler: func(
-			input InputMetadata,
-			output OutputMetadata,
-			config handlerConfig,
-		) http.Handler {
-			return handlerHTTP(handler, input, output, config)
-		},
-	}
 	for _, option := range options {
-		option.applyRoute(&registered)
+		if option == nil {
+			panic("amigo: route option cannot be nil")
+		}
+		option(&r)
 	}
-	router.addRoute(registered)
+
+	return r
 }
 
-func joinPath(prefix, path string) string {
-	if prefix == "" {
-		return path
-	}
-	if path == "" {
-		return prefix
-	}
-	return strings.TrimRight(prefix, "/") + "/" + strings.TrimLeft(path, "/")
+func (r route) pattern() string {
+	return r.method + " " + r.path
 }

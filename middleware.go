@@ -5,16 +5,24 @@ import (
 	"slices"
 )
 
-// Middleware wraps an HTTP handler using the request and response primitives
-// from net/http.
-type Middleware func(http.ResponseWriter, *http.Request, http.Handler)
+// Middleware wraps an HTTP handler with cross-cutting request behavior.
+// Middleware declared first is the outermost wrapper and executes first.
+type Middleware func(http.Handler) http.Handler
 
-func applyMiddleware(handler http.Handler, middleware []Middleware) http.Handler {
-	for _, current := range slices.Backward(middleware) {
-		next := handler
-		handler = http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-			current(w, req, next)
-		})
+func validateMiddlewares(middlewares []Middleware) {
+	for _, middleware := range middlewares {
+		if middleware == nil {
+			panic("amigo: middleware cannot be nil")
+		}
+	}
+}
+
+func applyMiddlewares(handler http.Handler, middlewares []Middleware) http.Handler {
+	for _, middleware := range slices.Backward(middlewares) {
+		handler = middleware(handler)
+		if handler == nil {
+			panic("amigo: middleware returned a nil handler")
+		}
 	}
 	return handler
 }
