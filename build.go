@@ -117,7 +117,7 @@ func buildOutputMetadata[Out any]() outputMetadata {
 	}
 
 	metadata := outputMetadata{body: newBodyMetadata()}
-	if outputType.Implements(reflect.TypeFor[renderedOutput]()) {
+	if outputType == reflect.TypeFor[HTML]() {
 		metadata.mediaType = htmlMediaType
 		return metadata
 	}

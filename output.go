@@ -1,7 +1,6 @@
 package amigo
 
 import (
-	"context"
 	"encoding/json/v2"
 	"fmt"
 	"net/http"
@@ -24,15 +23,14 @@ func checkOutputStatus(status int, metadata outputMetadata) {
 }
 
 func writeEndpointOutput[Out any](
-	ctx context.Context,
 	w http.ResponseWriter,
 	status int,
 	output Out,
 	metadata outputMetadata,
-	renderer Renderer,
 ) error {
-	if rendered, ok := any(output).(renderedOutput); ok {
-		return writeRenderedOutput(ctx, w, status, rendered, renderer)
+	if html, ok := any(output).(HTML); ok {
+		writeHTML(w, status, html)
+		return nil
 	}
 	return writeOutput(w, status, output, metadata)
 }
