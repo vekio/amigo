@@ -1,11 +1,14 @@
 package amigo
 
 import (
+	"context"
 	"encoding/json/v2"
 	"fmt"
 	"net/http"
 	"reflect"
 )
+
+const jsonMediaType = "application/json"
 
 func statusAllowsBody(status int) bool {
 	return status >= http.StatusOK &&
@@ -15,9 +18,23 @@ func statusAllowsBody(status int) bool {
 }
 
 func checkOutputStatus(status int, metadata outputMetadata) {
-	if !statusAllowsBody(status) && !metadata.body.isEmpty() {
-		panic(fmt.Sprintf("amigo: response status %d does not allow a JSON body", status))
+	if !statusAllowsBody(status) && metadata.mediaType != "" {
+		panic(fmt.Sprintf("amigo: response status %d does not allow a response body", status))
 	}
+}
+
+func writeEndpointOutput[Out any](
+	ctx context.Context,
+	w http.ResponseWriter,
+	status int,
+	output Out,
+	metadata outputMetadata,
+	renderer Renderer,
+) error {
+	if rendered, ok := any(output).(renderedOutput); ok {
+		return writeRenderedOutput(ctx, w, status, rendered, renderer)
+	}
+	return writeOutput(w, status, output, metadata)
 }
 
 func writeOutput[Out any](
@@ -38,7 +55,7 @@ func writeOutput[Out any](
 	}
 
 	writeOutputHeaders(w, reflect.ValueOf(output), metadata.headers)
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Type", jsonMediaType)
 	w.WriteHeader(status)
 	_, _ = w.Write(data)
 	return nil

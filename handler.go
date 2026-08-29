@@ -10,8 +10,9 @@ import (
 // fields tagged with path, query, or header are bound from their corresponding
 // request values; the remaining input is decoded from JSON. Output fields
 // tagged with header become response headers; the remaining output is encoded
-// as JSON. Transport fields must also use json:"-" so metadata cannot leak into
-// JSON representations. Input fields may use validate:"required,name" to apply
+// as JSON. An [HTML] output is rendered using the API's configured [Renderer].
+// Transport fields must also use json:"-" so metadata cannot leak into JSON
+// representations. Input fields may use validate:"required,name" to apply
 // the built-in presence check and validators registered on the API. Query
 // slices collect repeated keys; scalar query fields reject repeated keys.
 // Required validation always runs first and stops validation for that field on
@@ -28,6 +29,7 @@ type RawEndpointFunc func(http.ResponseWriter, *http.Request) error
 
 func endpointHandler[In, Out any](
 	logger *slog.Logger,
+	renderer Renderer,
 	route route,
 	inputMetadata inputMetadata,
 	outputMetadata outputMetadata,
@@ -52,7 +54,7 @@ func endpointHandler[In, Out any](
 			return
 		}
 
-		if err := writeOutput(w, route.status, output, outputMetadata); err != nil {
+		if err := writeEndpointOutput(request.Context(), w, route.status, output, outputMetadata, renderer); err != nil {
 			writeError(logger, w, request, route, err)
 		}
 	}

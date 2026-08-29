@@ -17,3 +17,13 @@ func WithLogger(logger *slog.Logger) APIOption {
 		api.logger = logger
 	}
 }
+
+// WithRenderer sets the renderer used by endpoints returning [HTML].
+func WithRenderer(renderer Renderer) APIOption {
+	if renderer == nil {
+		panic("amigo: renderer cannot be nil")
+	}
+	return func(api *API) {
+		api.renderer = renderer
+	}
+}

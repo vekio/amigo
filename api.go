@@ -19,6 +19,7 @@ type API struct {
 	operations []operation
 	root       *Router
 	logger     *slog.Logger
+	renderer   Renderer
 	validators validatorRegistry
 }
 

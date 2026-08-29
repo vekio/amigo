@@ -82,12 +82,15 @@ func (router *Router) registerEndpoint[In, Out any](
 	endpointRoute := router.buildRoute(method, path, options...)
 	input := buildInputMetadata[In](endpointRoute.path, router.api.validators)
 	output := buildOutputMetadata[Out]()
+	if output.mediaType == htmlMediaType && router.api.renderer == nil {
+		panic("amigo: HTML endpoint requires a renderer")
+	}
 	checkOutputStatus(endpointRoute.status, output)
 	endpointRoute.inputType = reflect.TypeFor[In]()
 	endpointRoute.outputType = reflect.TypeFor[Out]()
 	endpointRoute.input = input
 	endpointRoute.output = output
-	handler := endpointHandler(router.api.logger, endpointRoute, input, output, endpoint)
+	handler := endpointHandler(router.api.logger, router.api.renderer, endpointRoute, input, output, endpoint)
 
 	router.api.checkOperationID(endpointRoute.operationID)
 	router.api.mux.Handle(

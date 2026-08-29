@@ -21,8 +21,9 @@ type inputParameter struct {
 }
 
 type outputMetadata struct {
-	headers []outputHeader
-	body    bodyMetadata
+	headers   []outputHeader
+	body      bodyMetadata
+	mediaType string
 }
 
 type outputHeader struct {
@@ -116,6 +117,10 @@ func buildOutputMetadata[Out any]() outputMetadata {
 	}
 
 	metadata := outputMetadata{body: newBodyMetadata()}
+	if outputType.Implements(reflect.TypeFor[renderedOutput]()) {
+		metadata.mediaType = htmlMediaType
+		return metadata
+	}
 	for field := range outputType.Fields() {
 		header, ok := buildOutputHeader(field)
 		if ok {
@@ -125,6 +130,9 @@ func buildOutputMetadata[Out any]() outputMetadata {
 		if name, exists := jsonBodyFieldName(field); exists {
 			metadata.body.add(field, field.Index[0], name)
 		}
+	}
+	if !metadata.body.isEmpty() {
+		metadata.mediaType = jsonMediaType
 	}
 	return metadata
 }
