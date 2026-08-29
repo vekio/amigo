@@ -125,6 +125,55 @@ func TestOptionalValidatorSkipsMissingField(t *testing.T) {
 	}
 }
 
+func TestRequiredRunsFirstAndStopsFieldValidation(t *testing.T) {
+	tests := []struct {
+		name                string
+		target              string
+		wantStatus          int
+		wantValidatorCalled bool
+	}{
+		{name: "missing", target: "/things", wantStatus: http.StatusUnprocessableEntity},
+		{name: "present but blank", target: "/things?name=+++", wantStatus: http.StatusUnprocessableEntity},
+		{name: "present and valid", target: "/things?name=amigo", wantStatus: http.StatusOK, wantValidatorCalled: true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			api := New()
+			validatorCalled := false
+			api.Validator("known", func(string) error {
+				validatorCalled = true
+				return nil
+			})
+			api.GET("/things", func(context.Context, struct {
+				Name string `query:"name" json:"-" validate:"known,required"`
+			}) (struct{}, error) {
+				return struct{}{}, nil
+			})
+
+			response := httptest.NewRecorder()
+			api.ServeHTTP(response, httptest.NewRequest(http.MethodGet, test.target, nil))
+
+			if response.Code != test.wantStatus {
+				t.Fatalf("status = %d, want %d; body = %s", response.Code, test.wantStatus, response.Body.String())
+			}
+			if validatorCalled != test.wantValidatorCalled {
+				t.Errorf("validator called = %t, want %t", validatorCalled, test.wantValidatorCalled)
+			}
+			if test.wantStatus == http.StatusUnprocessableEntity {
+				var got problem
+				if err := json.Unmarshal(response.Body.Bytes(), &got); err != nil {
+					t.Fatalf("decode problem: %v", err)
+				}
+				want := []fieldError{{Location: "query.name", Message: "is required"}}
+				if !reflect.DeepEqual(got.Errors, want) {
+					t.Errorf("errors = %#v, want %#v", got.Errors, want)
+				}
+			}
+		})
+	}
+}
+
 func TestQuerySliceSupportsRequiredAndCustomValidation(t *testing.T) {
 	api := New()
 	api.Validator("multiple", func(values []string) error {

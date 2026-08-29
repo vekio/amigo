@@ -14,6 +14,8 @@ import (
 // JSON representations. Input fields may use validate:"required,name" to apply
 // the built-in presence check and validators registered on the API. Query
 // slices collect repeated keys; scalar query fields reject repeated keys.
+// Required validation always runs first and stops validation for that field on
+// failure; other validators only run when the field is present.
 // Parameter types implementing encoding.TextUnmarshaler are also supported;
 // this includes time.Time (RFC 3339) and uuid.UUID (RFC 9562 text form).
 type EndpointFunc[In, Out any] func(context.Context, In) (Out, error)

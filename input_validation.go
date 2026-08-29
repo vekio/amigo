@@ -10,6 +10,7 @@ type fieldValidation struct {
 	fieldID    int
 	fieldIndex []int
 	location   string
+	required   *fieldValidator
 	validators []fieldValidator
 }
 
@@ -75,6 +76,10 @@ func buildFieldValidation(
 				field.Type,
 			))
 		}
+		if validator.name == requiredValidator {
+			validation.required = &validator
+			continue
+		}
 		validation.validators = append(validation.validators, validator)
 	}
 	return validation, true
@@ -88,19 +93,18 @@ func validateInput(input any, metadata inputMetadata, present fieldSet) error {
 		fieldValue := inputValue.FieldByIndex(validation.fieldIndex)
 		fieldPresent := present.contains(validation.fieldID)
 
-		for _, validator := range validation.validators {
-			if !fieldPresent && validator.name != requiredValidator {
+		if validation.required != nil {
+			if err := validation.required.validate(fieldValue, fieldPresent); err != nil {
+				errors = append(errors, newFieldError(validation.location, validation.required.name, err))
 				continue
 			}
+		}
+		if !fieldPresent {
+			continue
+		}
+		for _, validator := range validation.validators {
 			if err := validator.validate(fieldValue, fieldPresent); err != nil {
-				message := err.Error()
-				if message == "" {
-					message = fmt.Sprintf("failed %s validation", validator.name)
-				}
-				errors = append(errors, fieldError{
-					Location: validation.location,
-					Message:  message,
-				})
+				errors = append(errors, newFieldError(validation.location, validator.name, err))
 			}
 		}
 	}
@@ -109,6 +113,14 @@ func validateInput(input any, metadata inputMetadata, present fieldSet) error {
 		return nil
 	}
 	return &validationError{errors: errors}
+}
+
+func newFieldError(location string, validatorName string, err error) fieldError {
+	message := err.Error()
+	if message == "" {
+		message = fmt.Sprintf("failed %s validation", validatorName)
+	}
+	return fieldError{Location: location, Message: message}
 }
 
 var _ error = (*validationError)(nil)
