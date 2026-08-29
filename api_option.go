@@ -1,6 +1,8 @@
 package amigo
 
-import "log/slog"
+import (
+	"log/slog"
+)
 
 // APIOption configures an API when it is created.
 type APIOption func(*API)

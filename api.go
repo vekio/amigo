@@ -6,8 +6,10 @@
 package amigo
 
 import (
+	"io/fs"
 	"log/slog"
 	"net/http"
+	"strings"
 )
 
 // API owns the HTTP route tree and its underlying [http.ServeMux].
@@ -49,6 +51,30 @@ func (app *API) checkOperationID(operationID string) {
 // routes and nested groups registered below it.
 func (app *API) Group(prefix string, middlewares ...Middleware) *Router {
 	return app.root.Group(prefix, middlewares...)
+}
+
+// StaticFiles serves root below prefix using Go's standard file server.
+// It can be used with filesystems created by os.DirFS, embed.FS, or [fs.Sub].
+// Static files are not included in the API's OpenAPI operations.
+func (app *API) StaticFiles(prefix string, root fs.FS) {
+	if prefix == "" || !strings.HasPrefix(prefix, "/") {
+		panic("amigo: static files prefix must start with /")
+	}
+	if root == nil {
+		panic("amigo: static files filesystem cannot be nil")
+	}
+
+	prefix = strings.TrimRight(prefix, "/")
+	if prefix == "" {
+		prefix = "/"
+	}
+
+	fileServer := http.FileServerFS(root)
+	if prefix == "/" {
+		app.mux.Handle(http.MethodGet+" /", fileServer)
+		return
+	}
+	app.mux.Handle(http.MethodGet+" "+prefix+"/", http.StripPrefix(prefix, fileServer))
 }
 
 // ServeHTTP implements http.Handler.
